@@ -22,8 +22,13 @@ object WebUi {
  .bk { color:#888 }
  .bv { color:#eee; font-weight:600 }
  .content { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap }
- .video { flex:1 1 560px; min-width:280px; min-height:220px; position:relative }
- .video img { width:100%; max-height:78vh; object-fit:contain; background:#000; border-radius:8px; display:block }
+ .video { flex:1 1 560px; min-width:280px; min-height:220px; position:relative; display:flex; align-items:center; justify-content:center; max-height:78vh; overflow:hidden; background:#000; border-radius:8px }
+ .video img { display:block; flex:0 0 auto; width:100%; height:auto; max-height:78vh; object-fit:contain; user-select:none; -webkit-user-drag:none }
+ .video.fitw img { max-height:none }
+ .video.fith img { width:auto; height:78vh; max-width:none }
+ .video.oneone img { width:auto; height:auto; max-width:none; max-height:none }
+ .video.pannable { cursor:grab }
+ .video.grabbing { cursor:grabbing }
  .overlay { position:absolute; inset:0; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; background:#000c; border-radius:8px; color:#bbb; font-size:15px }
  .panel { flex:0 1 320px; background:#1b1b1b; border-radius:8px; padding:14px }
  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#8ab; margin:15px 0 6px }
@@ -36,6 +41,14 @@ object WebUi {
  button.secondary { background:#333 }
  button.danger { background:#8a3030 }
  .actions { display:flex; gap:8px; flex-wrap:wrap }
+ .paneClose { margin-left:auto; padding:5px 10px; font-size:15px; line-height:1.1; background:#2b2b2b; color:#9ab }
+ .paneClose:hover { background:#3a3a3a; color:#fff }
+ .seg { display:flex }
+ .seg button { background:#262626; color:#bbb; padding:7px 10px; font-size:12px; border-radius:0; border-left:1px solid #111 }
+ .seg button:hover { background:#333; color:#eee }
+ .seg button:first-child { border-radius:6px 0 0 6px; border-left:0 }
+ .seg button:last-child { border-radius:0 6px 6px 0 }
+ .seg button.on { background:#2b6cb0; color:#fff }
  .hidden { display:none !important }
  .badge { font-size:11px; padding:3px 8px; border-radius:10px; background:#2b6cb0 }
  .badge.anon { background:#555 }
@@ -50,9 +63,15 @@ object WebUi {
   <h1>andWebCam</h1>
   <span id="who" class="badge locked">...</span>
   <span class="grow"></span>
-  <button id="loginBtn" class="secondary">Log in</button>
-  <button id="logoutBtn" class="secondary hidden">Log out</button>
+  <span class="seg" id="scales">
+    <button data-scale="fit" title="Fit the whole frame">Fit</button>
+    <button data-scale="w" title="Fit width (drag to pan)">W</button>
+    <button data-scale="h" title="Fit height (drag to pan)">H</button>
+    <button data-scale="1" title="Actual size, 1:1 (drag to pan)">1:1</button>
+  </span>
   <button id="paneToggle" class="secondary hidden" title="Hide the settings pane">Settings</button>
+  <button id="logoutBtn" class="secondary hidden">Log out</button>
+  <button id="loginBtn" class="secondary">Log in</button>
 </header>
 <main>
   <div class="banner">
@@ -64,7 +83,7 @@ object WebUi {
     <div class="bitem"><span class="bk">Viewers</span><span class="bv" id="i_view">-</span></div>
   </div>
   <div class="content">
-    <div class="video">
+    <div class="video" id="video">
       <img id="vid" alt="camera stream">
       <div id="stopped" class="overlay hidden"><div>Streaming is stopped</div><div id="stoppedHint" style="font-size:12px"></div></div>
     </div>
@@ -73,6 +92,7 @@ object WebUi {
       <div class="actions">
         <button id="toggle">Stop streaming</button>
         <button id="reboot" class="danger">Restart phone</button>
+        <button id="paneClose" class="paneClose" title="Hide the settings pane" aria-label="Hide the settings pane">&raquo;</button>
       </div>
       <p class="err" id="actionMsg"></p>
 
@@ -197,6 +217,78 @@ el('vid').onerror = function() {
     vidRetry = setTimeout(startVideo, 1000);
   }
 };
+// Scaling: fit the whole frame, fit the width, fit the height, or actual size.
+// Anything larger than the viewing area can be dragged to pan around it.
+var scaleMode = 'fit';
+var panX = 0, panY = 0;
+var drag = null;
+function scalePref(v) {
+  try {
+    if (v === undefined) { return localStorage.getItem('awcScale'); }
+    localStorage.setItem('awcScale', v);
+  } catch (e) {}
+  return null;
+}
+function panLimits() {
+  var img = el('vid'), box = el('video');
+  return {
+    x: Math.max(0, (img.offsetWidth - box.clientWidth) / 2),
+    y: Math.max(0, (img.offsetHeight - box.clientHeight) / 2)
+  };
+}
+function updatePan() {
+  var l = panLimits();
+  panX = Math.max(-l.x, Math.min(l.x, panX));
+  panY = Math.max(-l.y, Math.min(l.y, panY));
+  el('vid').style.transform = (panX || panY) ? 'translate(' + panX + 'px,' + panY + 'px)' : '';
+  el('video').classList.toggle('pannable', l.x > 1 || l.y > 1);
+}
+function applyScale() {
+  var box = el('video');
+  box.classList.remove('fitw', 'fith', 'oneone');
+  if (scaleMode === 'w') { box.classList.add('fitw'); }
+  if (scaleMode === 'h') { box.classList.add('fith'); }
+  if (scaleMode === '1') { box.classList.add('oneone'); }
+  var b = document.querySelectorAll('#scales button');
+  for (var i = 0; i < b.length; i++) {
+    b[i].classList.toggle('on', b[i].getAttribute('data-scale') === scaleMode);
+  }
+  panX = 0;
+  panY = 0;
+  updatePan();
+}
+var scaleBtns = document.querySelectorAll('#scales button');
+for (var i = 0; i < scaleBtns.length; i++) {
+  scaleBtns[i].onclick = function() {
+    scaleMode = this.getAttribute('data-scale');
+    scalePref(scaleMode);
+    applyScale();
+  };
+}
+el('vid').ondragstart = function() { return false; };
+el('video').addEventListener('pointerdown', function(e) {
+  var l = panLimits();
+  if ((l.x < 1 && l.y < 1) || !el('stopped').classList.contains('hidden')) { return; }
+  drag = { x: e.clientX, y: e.clientY, px: panX, py: panY };
+  el('video').classList.add('grabbing');
+  try { el('video').setPointerCapture(e.pointerId); } catch (err) {}
+  e.preventDefault();
+});
+el('video').addEventListener('pointermove', function(e) {
+  if (!drag) { return; }
+  var l = panLimits();
+  panX = Math.max(-l.x, Math.min(l.x, drag.px + (e.clientX - drag.x)));
+  panY = Math.max(-l.y, Math.min(l.y, drag.py + (e.clientY - drag.y)));
+  el('vid').style.transform = 'translate(' + panX + 'px,' + panY + 'px)';
+});
+function endDrag() {
+  drag = null;
+  el('video').classList.remove('grabbing');
+}
+el('video').addEventListener('pointerup', endDrag);
+el('video').addEventListener('pointercancel', endDrag);
+el('vid').addEventListener('load', updatePan);
+window.addEventListener('resize', updatePan);
 function refresh() {
   fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
     window.S = s;
@@ -296,11 +388,13 @@ function applyPane() {
   t.classList.toggle('hidden', !admin);
   t.title = hidden ? 'Show the settings pane' : 'Hide the settings pane';
   t.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  updatePan();
 }
 el('paneToggle').onclick = function() {
   panePref(panePref() === 'hidden' ? 'shown' : 'hidden');
   applyPane();
 };
+el('paneClose').onclick = el('paneToggle').onclick;
 el('loginBtn').onclick = function() { el('loginForm').classList.toggle('hidden'); };
 el('logoutBtn').onclick = function() { post('/api/logout', {}).then(function() { location.reload(); }); };
 el('doLogin').onclick = function() {
@@ -308,6 +402,8 @@ el('doLogin').onclick = function() {
     if (r.ok) { location.reload(); } else { el('loginErr').textContent = 'Wrong username or password'; }
   });
 };
+scaleMode = scalePref() || 'fit';
+applyScale();
 refresh();
 setInterval(refresh, 2000);
 </script>

@@ -61,9 +61,22 @@ Open `https://andwebcam.local:8443/` (or the IP shown on the phone). The page
 shows a narrow status banner, the live stream (as large as the window allows)
 and, when logged in, all the controls.
 
-The **Settings** button in the header shows and hides the settings pane, so the
-video can take the full width when you are only watching. The choice is
-remembered in that browser.
+The **Settings** button in the header (and the **»** button at the right of the
+panel's action row) shows and hides the settings pane, so the video can take the
+full width when you are only watching. The choice is remembered in that browser.
+
+The header also has four scaling buttons for the video:
+
+| Button | Meaning                                                  |
+|--------|----------------------------------------------------------|
+| `Fit`  | fit the whole frame into the viewing area (default)      |
+| `W`    | fit the width, may crop vertically                        |
+| `H`    | fit the height, may crop horizontally                     |
+| `1:1`  | actual pixels, no scaling                                 |
+
+When the picture is larger than the viewing area it is clipped to it and can be
+dragged with the mouse to pan; switching mode re-centres it. The mode is
+remembered in the browser too.
 
 ### Streaming, idle and power
 
