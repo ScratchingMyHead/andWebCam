@@ -23,7 +23,7 @@ object WebUi {
  .bv { color:#eee; font-weight:600 }
  .content { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap }
  .video { flex:1 1 560px; min-width:280px; min-height:220px; position:relative }
- .video img { width:100%; background:#000; border-radius:8px; display:block }
+ .video img { width:100%; max-height:78vh; object-fit:contain; background:#000; border-radius:8px; display:block }
  .overlay { position:absolute; inset:0; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; background:#000c; border-radius:8px; color:#bbb; font-size:15px }
  .panel { flex:0 1 320px; background:#1b1b1b; border-radius:8px; padding:14px }
  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#8ab; margin:15px 0 6px }
@@ -41,6 +41,7 @@ object WebUi {
  .badge.anon { background:#555 }
  .badge.locked { background:#7a2f2f }
  .err { color:#f66; font-size:12px; min-height:1.2em; margin:6px 0 0 }
+ .hint { color:#888; font-size:12px; margin:6px 0 0 }
  .check { display:flex; align-items:center; gap:8px; font-size:13px; color:#bbb }
 </style>
 </head>
@@ -126,7 +127,7 @@ object WebUi {
         <input id="s_port" type="number" min="1" max="65535">
       </div>
       <button id="apply">Apply service settings</button>
-      <p class="err">Changing the name or port restarts the server; reconnect at the new address.</p>
+      <p class="hint">Changing the name or port restarts the server; reconnect at the new address.</p>
 
       <h2>Admin password</h2>
       <div class="row">
@@ -134,7 +135,7 @@ object WebUi {
         <input id="p_new" type="password">
       </div>
       <button id="pwset">Change password</button>
-      <p class="err" id="pwmsg">Once changed, the phone screen stops displaying the password.</p>
+      <p class="hint" id="pwmsg">Once changed, the phone screen stops displaying the password.</p>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
