@@ -56,9 +56,10 @@ provisioning (a device management service, or the command below). On a normal
 install the button therefore reports that the phone is not managed, and you
 restart it with the power button instead. Nothing else in the app depends on it.
 
-To enable it, install andWebCam and run this once, from a machine with a USB
-cable (the phone must have no accounts, and this is the only step that needs
-`adb`):
+To enable it, install andWebCam, enable developer tools, turn on USB debugging, then
+run this once, from a machine with a USB cable (the phone must have no accounts, and
+this is the only step that needs `adb` and is only required if you want reboot
+functionality):
 
 ```
 adb shell dpm set-device-owner net.andwebcam/.AdminReceiver
