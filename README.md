@@ -75,8 +75,9 @@ The header also has four scaling buttons for the video:
 | `1:1`  | actual pixels, no scaling                                 |
 
 When the picture is larger than the viewing area it is clipped to it and can be
-dragged with the mouse to pan; switching mode re-centres it. The mode is
-remembered in the browser too.
+dragged with the mouse, or scrolled with the wheel, to pan; at an edge the wheel
+scrolls the page again. Switching mode re-centres it. The mode is remembered in
+the browser too.
 
 ### Streaming, idle and power
 

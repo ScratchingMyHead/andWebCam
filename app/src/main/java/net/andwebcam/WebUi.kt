@@ -236,11 +236,14 @@ function panLimits() {
     y: Math.max(0, (img.offsetHeight - box.clientHeight) / 2)
   };
 }
+function applyPan() {
+  el('vid').style.transform = (panX || panY) ? 'translate(' + panX + 'px,' + panY + 'px)' : '';
+}
 function updatePan() {
   var l = panLimits();
   panX = Math.max(-l.x, Math.min(l.x, panX));
   panY = Math.max(-l.y, Math.min(l.y, panY));
-  el('vid').style.transform = (panX || panY) ? 'translate(' + panX + 'px,' + panY + 'px)' : '';
+  applyPan();
   el('video').classList.toggle('pannable', l.x > 1 || l.y > 1);
 }
 function applyScale() {
@@ -279,7 +282,7 @@ el('video').addEventListener('pointermove', function(e) {
   var l = panLimits();
   panX = Math.max(-l.x, Math.min(l.x, drag.px + (e.clientX - drag.x)));
   panY = Math.max(-l.y, Math.min(l.y, drag.py + (e.clientY - drag.y)));
-  el('vid').style.transform = 'translate(' + panX + 'px,' + panY + 'px)';
+  applyPan();
 });
 function endDrag() {
   drag = null;
@@ -287,6 +290,30 @@ function endDrag() {
 }
 el('video').addEventListener('pointerup', endDrag);
 el('video').addEventListener('pointercancel', endDrag);
+// The scroll wheel pans the picture while there is something to pan to; at an
+// edge it lets the page scroll again.
+el('video').addEventListener('wheel', function(e) {
+  var l = panLimits();
+  var unit = e.deltaMode === 1 ? 16 : (e.deltaMode === 2 ? el('video').clientHeight : 1);
+  var dy = e.deltaY * unit;
+  var dx = e.deltaX * unit;
+  var moved = false;
+  if (l.y > 1) {
+    var ny = Math.max(-l.y, Math.min(l.y, panY - dy));
+    if (ny !== panY) { panY = ny; moved = true; }
+  } else if (l.x > 1 && dy) {
+    var nx = Math.max(-l.x, Math.min(l.x, panX - dy));
+    if (nx !== panX) { panX = nx; moved = true; }
+  }
+  if (l.x > 1 && dx) {
+    var mx = Math.max(-l.x, Math.min(l.x, panX - dx));
+    if (mx !== panX) { panX = mx; moved = true; }
+  }
+  if (moved) {
+    e.preventDefault();
+    applyPan();
+  }
+}, { passive: false });
 el('vid').addEventListener('load', updatePan);
 window.addEventListener('resize', updatePan);
 function refresh() {
