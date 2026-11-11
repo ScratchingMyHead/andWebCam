@@ -29,7 +29,10 @@ object WebUi {
  .video.oneone img { width:auto; height:auto; max-width:none; max-height:none }
  .video.pannable { cursor:grab }
  .video.grabbing { cursor:grabbing }
- .overlay { position:absolute; inset:0; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; background:#000c; border-radius:8px; color:#bbb; font-size:15px }
+ .vload { position:absolute; inset:0; z-index:2; display:none; align-items:center; justify-content:center; color:#777; font-size:13px }
+ .video.loading .vload { display:flex }
+ .video.loading img { display:none }
+ .overlay { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; background:#000c; border-radius:8px; color:#bbb; font-size:15px }
  .busy { position:absolute; top:10px; left:10px; z-index:3; display:flex; align-items:center; gap:8px; padding:5px 12px 5px 9px; border:1px solid #33506b; border-radius:20px; background:#000a; color:#cde; font-size:12px }
  .busy .spin { width:11px; height:11px; border-radius:50%; border:2px solid #33506b; border-top-color:#7cc4ff; animation:spin .7s linear infinite }
  .video.applying img { filter:brightness(.7) }
@@ -87,8 +90,9 @@ object WebUi {
     <div class="bitem"><span class="bk">Viewers</span><span class="bv" id="i_view">-</span></div>
   </div>
   <div class="content">
-    <div class="video" id="video">
-      <img id="vid" alt="camera stream">
+    <div class="video loading" id="video">
+      <img id="vid" alt="">
+      <div class="vload">Loading video...</div>
       <div id="busy" class="busy hidden"><span class="spin"></span><span id="busyText">Applying...</span></div>
       <div id="stopped" class="overlay hidden"><div>Streaming is stopped</div><div id="stoppedHint" style="font-size:12px"></div></div>
     </div>
@@ -198,17 +202,43 @@ function setSetting(key, value) {
 }
 var showingVideo = null;
 var vidRetry = null;
+var vidLoad = null;
+var vidPoll = null;
+// While the first frame is on its way the image element would otherwise show a
+// broken icon and its alt text, so it is hidden behind a plain placeholder until
+// a frame has actually been decoded (the load event is not delivered for
+// multipart streams in every browser, so the decoded size is checked too).
+function setLoading(on) {
+  el('video').classList.toggle('loading', !!on);
+  clearInterval(vidPoll);
+  clearTimeout(vidLoad);
+  if (on) {
+    vidPoll = setInterval(function() {
+      if (el('vid').naturalWidth > 0) { setLoading(false); }
+    }, 150);
+    // A stream that is enabled but has not produced anything for a long time is
+    // better shown as an empty frame than as a permanent "Loading video...".
+    vidLoad = setTimeout(function() { setLoading(false); }, 10000);
+  } else {
+    // The picture now has its real size, so the pan limits and cursor change.
+    updatePan();
+  }
+}
 function startVideo() {
   var img = el('vid');
-  img.style.display = 'block';
+  img.style.display = '';
+  setLoading(true);
   img.src = '/video?t=' + Date.now();
   el('stopped').classList.add('hidden');
 }
 function stopVideo() {
   clearTimeout(vidRetry);
+  clearInterval(vidPoll);
+  clearTimeout(vidLoad);
   var img = el('vid');
   img.removeAttribute('src');
   img.style.display = 'none';
+  el('video').classList.remove('loading');
   el('stopped').classList.remove('hidden');
 }
 function applyVideo(s) {
@@ -218,7 +248,9 @@ function applyVideo(s) {
   if (want) { startVideo(); } else { stopVideo(); }
 }
 // The stream can be cut by the network; reconnect instead of showing a dead image.
+el('vid').onload = function() { setLoading(false); };
 el('vid').onerror = function() {
+  setLoading(true);
   if (window.S && window.S.streaming) {
     clearTimeout(vidRetry);
     vidRetry = setTimeout(startVideo, 1000);

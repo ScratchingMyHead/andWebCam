@@ -65,6 +65,10 @@ The **Settings** button in the header (and the **»** button at the right of the
 panel's action row) shows and hides the settings pane, so the video can take the
 full width when you are only watching. The choice is remembered in that browser.
 
+While the stream is connecting — after a reload, or while it reconnects after a
+drop — the video area shows *Loading video...* instead of a broken image, and
+the picture appears as soon as the first frame has arrived.
+
 The header also has four scaling buttons for the video:
 
 | Button | Meaning                                                  |
