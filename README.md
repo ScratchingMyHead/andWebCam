@@ -79,6 +79,10 @@ dragged with the mouse, or scrolled with the wheel, to pan; at an edge the wheel
 scrolls the page again. Switching mode re-centres it. The mode is remembered in
 the browser too.
 
+Camera settings (resolution, camera, orientation, frame rate, quality, zoom) do
+not take effect instantly. A small **Applying...** spinner appears over the video
+for a moment after one is sent, so it is clear the change is on its way.
+
 ### Streaming, idle and power
 
 * **Start / Stop streaming** buttons turn the stream on and off. While stopped,

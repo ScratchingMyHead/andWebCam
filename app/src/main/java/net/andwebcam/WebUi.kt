@@ -30,6 +30,10 @@ object WebUi {
  .video.pannable { cursor:grab }
  .video.grabbing { cursor:grabbing }
  .overlay { position:absolute; inset:0; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; background:#000c; border-radius:8px; color:#bbb; font-size:15px }
+ .busy { position:absolute; top:10px; left:10px; z-index:3; display:flex; align-items:center; gap:8px; padding:5px 12px 5px 9px; border:1px solid #33506b; border-radius:20px; background:#000a; color:#cde; font-size:12px }
+ .busy .spin { width:11px; height:11px; border-radius:50%; border:2px solid #33506b; border-top-color:#7cc4ff; animation:spin .7s linear infinite }
+ .video.applying img { filter:brightness(.7) }
+ @keyframes spin { to { transform:rotate(360deg) } }
  .panel { flex:0 1 320px; background:#1b1b1b; border-radius:8px; padding:14px }
  .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#8ab; margin:15px 0 6px }
  .panel h2:first-child { margin-top:0 }
@@ -85,6 +89,7 @@ object WebUi {
   <div class="content">
     <div class="video" id="video">
       <img id="vid" alt="camera stream">
+      <div id="busy" class="busy hidden"><span class="spin"></span><span id="busyText">Applying...</span></div>
       <div id="stopped" class="overlay hidden"><div>Streaming is stopped</div><div id="stoppedHint" style="font-size:12px"></div></div>
     </div>
     <div class="panel hidden" id="admin">
@@ -185,7 +190,8 @@ function post(path, obj) {
 function setSetting(key, value) {
   var o = {}; o[key] = value;
   post('/api/settings', o).then(function(r) {
-    if (r.ok === false) { alert('Not authorized'); }
+    if (r.ok === false) { alert('Not authorized'); return; }
+    startApply(o);
     setTimeout(refresh, 250);
   });
 }
@@ -316,6 +322,26 @@ el('video').addEventListener('wheel', function(e) {
 }, { passive: false });
 el('vid').addEventListener('load', updatePan);
 window.addEventListener('resize', updatePan);
+// Camera changes take a moment to show up in the stream and there is no
+// dependable signal for exactly when they do, so show a spinner for a moment
+// after any camera setting is sent.
+var CAMERA_KEYS = { facing:1, resolution:1, fps:1, quality:1, zoom:1, orientation:1, torch:1 };
+var busyTimer = null;
+function flashBusy() {
+  el('busy').classList.remove('hidden');
+  el('busyText').textContent = 'Applying...';
+  el('video').classList.add('applying');
+  clearTimeout(busyTimer);
+  busyTimer = setTimeout(function() {
+    el('busy').classList.add('hidden');
+    el('video').classList.remove('applying');
+  }, 1200);
+}
+function startApply(o) {
+  for (var k in o) {
+    if (CAMERA_KEYS[k]) { flashBusy(); return; }
+  }
+}
 function refresh() {
   fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
     window.S = s;
