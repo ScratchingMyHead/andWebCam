@@ -9,8 +9,8 @@ import java.util.concurrent.atomic.AtomicLong
  * Fan-out of MJPEG frames to connected viewers.
  *
  * The camera thread calls [broadcast] with each JPEG; every registered client
- * gets it packaged as a multipart/x-mixed-replace part. A slow or dead client
- * is dropped on the first write error instead of stalling the camera.
+ * gets it packaged as a multipart/x-mixed-replace part. A dead client is
+ * dropped after a few consecutive write errors instead of stalling the camera.
  */
 class StreamHub {
     companion object {
@@ -19,6 +19,9 @@ class StreamHub {
 
     class Client(val out: OutputStream) {
         val done = CountDownLatch(1)
+
+        /** Consecutive failed writes; a client is dropped after a few. */
+        var failures = 0
         private val lock = Any()
 
         fun writePart(jpeg: ByteArray): Boolean {
@@ -33,6 +36,7 @@ class StreamHub {
                     out.flush()
                     true
                 } catch (e: Exception) {
+                    android.util.Log.w("andWebCam", "viewer write failed: ${e.message}")
                     false
                 }
             }
@@ -46,7 +50,10 @@ class StreamHub {
 
     private val clients = CopyOnWriteArrayList<Client>()
     private val frameCount = AtomicLong()
-    private val framesAdded = AtomicLong()
+
+    /** Notified with the number of connected viewers whenever it changes. */
+    @Volatile
+    var onClientsChanged: ((Int) -> Unit)? = null
 
     @Volatile
     var latest: ByteArray? = null
@@ -60,6 +67,7 @@ class StreamHub {
         clients.add(c)
         State.clients = clients.size
         latest?.let { c.writePart(it) }
+        onClientsChanged?.invoke(clients.size)
         return c
     }
 
@@ -67,16 +75,26 @@ class StreamHub {
         if (clients.remove(c)) {
             c.close()
             State.clients = clients.size
+            android.util.Log.i("andWebCam", "viewer left (${clients.size} left)")
+            onClientsChanged?.invoke(clients.size)
         }
+    }
+
+    /** Drop every viewer, e.g. when streaming is stopped. */
+    fun disconnectAll() {
+        for (c in clients.toList()) remove(c)
     }
 
     fun broadcast(jpeg: ByteArray) {
         latest = jpeg
         frameCount.incrementAndGet()
-        framesAdded.incrementAndGet()
         if (clients.isEmpty()) return
         for (c in clients) {
-            if (!c.writePart(jpeg)) remove(c)
+            if (c.writePart(jpeg)) {
+                c.failures = 0
+            } else if (++c.failures >= 3) {
+                remove(c)
+            }
         }
     }
 }

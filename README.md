@@ -34,13 +34,44 @@ adb shell pm grant net.andwebcam android.permission.CAMERA
 ```
 
 The camera permission has to be granted once. If the phone is unattended you
-can grant it over adb exactly as above; otherwise accept the prompt on first
-launch.
+can grant it over adb exactly as above; otherwise accept the prompts on first
+launch (camera, notifications on Android 13+, and a battery-optimisation
+exemption so the stream survives Doze).
+
+### Restarting the phone from the web UI
+
+Android gives no way for an ordinary app to reboot the device. andWebCam uses
+device owner, which you set once over adb (the phone must have no accounts):
+
+```
+adb shell dpm set-device-owner net.andwebcam/.AdminReceiver
+```
+
+The control page's **Restart phone** button then calls
+`DevicePolicyManager.reboot()`. Without device owner the button reports that
+error instead. Removing the app again requires clearing the owner first:
+
+```
+adb shell dpm remove-active-admin net.andwebcam/.AdminReceiver
+```
 
 ## Using it
 
 Open `https://andwebcam.local:8443/` (or the IP shown on the phone). The page
-shows the live stream and, when logged in, all the controls.
+shows a narrow status banner, the live stream (as large as the window allows)
+and, when logged in, all the controls.
+
+### Streaming, idle and power
+
+* **Start / Stop streaming** buttons turn the stream on and off. While stopped,
+  `/video` answers 503 and viewers are disconnected.
+* **Start streaming when the service starts** (default on) decides whether
+  streaming is enabled after a boot or service restart. It is a stored
+  preference; toggling it does not stop a stream that is already running.
+* The camera itself is **only open while somebody is watching**. When the last
+  viewer leaves, the camera is closed after a few seconds, so an unused phone
+  does not wear out its camera or battery. The next viewer opens it again.
+* The phone screen shows whether the service is running, streaming or idle.
 
 ### Authentication
 
@@ -63,16 +94,19 @@ shows the live stream and, when logged in, all the controls.
 | POST   | `/api/password`  | admin           | change the admin password        |
 | POST   | `/api/login`     | none            | get a session cookie             |
 | POST   | `/api/logout`    | none            | drop the session                 |
+| POST   | `/api/reboot`    | admin           | restart the phone (device owner) |
 | GET    | `/cert`          | none            | download the server certificate  |
 
 Settings that can be changed via `/api/settings`:
 
 `facing` (back/front), `resolution` (WxH), `fps`, `quality` (JPEG 10-100),
 `torch` (bool), `zoom` (1..max), `orientation` (0/90/180/270), `anonView`
-(bool), `startOnBoot` (bool), `serviceName`, `port`.
+(bool), `autoStartStreaming` (bool), `streaming` (bool), `startOnBoot` (bool),
+`serviceName`, `port`.
 
-Changing `resolution`, `facing`, `serviceName` or `port` rebuilds the capture
-session or restarts the server.
+`streaming` takes effect immediately (it is not a stored preference; use
+`autoStartStreaming` for that). Changing `resolution`, `facing`, `serviceName`
+or `port` rebuilds the capture session or restarts the server.
 
 ## Consuming it on the desktop
 
@@ -91,6 +125,16 @@ ffmpeg -i https://andwebcam.local:8443/video -c:v rawvideo -pix_fmt yuv420p -f v
 
 (`-ca_file andwebcam.pem` in place of `-k` once you trust the cert.)
 
+A long-lived stream is safer with ffmpeg's reconnect options, which survive a
+Wi-Fi blip instead of exiting:
+
+```
+ffmpeg -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
+       -i "https://admin:PASSWORD@andwebcam.local:8443/video" ...
+```
+
+The web page reconnects the video element by itself if the stream is cut.
+
 ## Notes / quirks
 
 * The bundled TLS certificate is self-signed with SAN `andwebcam.local`
@@ -108,3 +152,8 @@ ffmpeg -i https://andwebcam.local:8443/video -c:v rawvideo -pix_fmt yuv420p -f v
   null-deref) after a few seconds. The camera is also auto-reopened a few
   seconds after any error, so a HAL hiccup self-heals on an unattended phone.
 * No AndroidX or third-party dependencies are used, to keep the build small.
+* The service holds a high-performance Wi-Fi lock and a partial wake lock, so
+  the stream keeps running at full rate with the screen off.
+* A viewer connection can be reset by the network; the hub drops the client
+  after three failed writes, the camera closes a few seconds later, and the web
+  page or ffmpeg reconnect wakes it up again.

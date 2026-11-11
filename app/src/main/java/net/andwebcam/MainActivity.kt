@@ -2,11 +2,16 @@ package net.andwebcam
 
 import android.Manifest
 import android.app.Activity
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
+import android.provider.Settings
 import android.util.TypedValue
 import android.view.View
 import android.view.ViewGroup
@@ -21,6 +26,10 @@ import android.widget.TextView
  * configured from the web UI.
  */
 class MainActivity : Activity() {
+    private companion object {
+        const val REQ_PERMISSIONS = 1
+    }
+
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var statusView: TextView
     private lateinit var urlView: TextView
@@ -40,7 +49,7 @@ class MainActivity : Activity() {
         Prefs.init(this)
         fingerprint = try { Tls.fingerprint(this) } catch (e: Exception) { "" }
         setContentView(buildUi())
-        requestCameraPermission()
+        requestStartupPermissions()
         CamService.start(this)
     }
 
@@ -60,24 +69,63 @@ class MainActivity : Activity() {
         grantResults: IntArray,
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
-        if (requestCode == 1 && grantResults.isNotEmpty() && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-            CamService.reload(this)
+        if (requestCode == REQ_PERMISSIONS) {
+            if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+                CamService.reload(this)
+            }
+            requestBatteryExemption()
         }
     }
 
-    private fun requestCameraPermission() {
+    /**
+     * Everything the service needs, asked on first launch: camera (and
+     * notifications on Android 13+). Battery optimisation is requested
+     * separately as a system dialog.
+     */
+    private fun requestStartupPermissions() {
+        val needed = mutableListOf<String>()
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(arrayOf(Manifest.permission.CAMERA), 1)
+            needed += Manifest.permission.CAMERA
+        }
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            needed += Manifest.permission.POST_NOTIFICATIONS
+        }
+        if (needed.isEmpty()) {
+            requestBatteryExemption()
+        } else {
+            requestPermissions(needed.toTypedArray(), REQ_PERMISSIONS)
+        }
+    }
+
+    /**
+     * An unattended stream dies if the system dozes the app, so ask once to be
+     * exempt from battery optimisation.
+     */
+    private fun requestBatteryExemption() {
+        if (Prefs.batteryPromptAsked) return
+        val pm = getSystemService(PowerManager::class.java) ?: return
+        if (pm.isIgnoringBatteryOptimizations(packageName)) return
+        Prefs.batteryPromptAsked = true
+        try {
+            startActivity(
+                Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
+                    .setData(Uri.parse("package:$packageName"))
+            )
+        } catch (_: Exception) {
+            // Some ROMs have no handler for this; not fatal.
         }
     }
 
     private fun update() {
         val name = "${Prefs.serviceName}.local"
         val url = "https://$name:${Prefs.port}/"
-        statusView.text = if (State.running) {
-            "Running  -  ${State.framesPerSec} fps  -  ${State.clients} viewer(s)"
-        } else {
-            "Stopped"
+        statusView.text = when {
+            !State.running -> "Stopped"
+            !State.streaming -> "Running  -  streaming stopped"
+            !State.cameraActive -> "Running  -  idle (no viewers)"
+            else -> "Running  -  ${State.framesPerSec} fps  -  ${State.clients} viewer(s)"
         }
         urlView.text = url + "\n" + (State.ip ?: "no network address")
 

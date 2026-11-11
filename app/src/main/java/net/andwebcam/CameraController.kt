@@ -47,7 +47,7 @@ class CameraController(
     private val handler = Handler(thread.looper)
     private var loggedFirstFrame = false
 
-    private var device: CameraDevice? = null
+    @Volatile private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
 

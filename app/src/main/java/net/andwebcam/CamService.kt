@@ -5,6 +5,8 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
+import android.app.admin.DevicePolicyManager
+import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
@@ -54,11 +56,26 @@ class CamService : Service(), HttpServer.Host {
     private var mdns: Mdns? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: WifiManager.MulticastLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
     private var scheduler: ScheduledExecutorService? = null
     private var lastFrameCount = 0L
     private var started = false
+
+    /** Whether streaming is enabled (viewers are accepted and wake the camera). */
+    @Volatile
+    private var streamingEnabled = false
+
     private val mainHandler = Handler(Looper.getMainLooper())
-    private val cameraRetry = Runnable { if (started) camera.start() }
+    private val cameraRetry = Runnable {
+        if (started && streamingEnabled && hub.count > 0) camera.start()
+    }
+    private val idleStop = Runnable {
+        if (started && hub.count == 0) {
+            Log.i(TAG, "no viewers; closing camera to save power")
+            camera.stop()
+            updateNotification()
+        }
+    }
 
     override fun onCreate() {
         super.onCreate()
@@ -118,11 +135,14 @@ class CamService : Service(), HttpServer.Host {
         State.port = Prefs.port
         State.ip = localIp()
 
+        streamingEnabled = Prefs.autoStartStreaming
+        hub.onClientsChanged = { count -> onClientsChanged(count) }
+        // The camera is not opened here: it stays closed until someone is
+        // actually watching, and closes again when the last viewer leaves.
+
         startNetworking()
 
-        if (camera.hasPermission()) {
-            camera.start()
-        } else {
+        if (!camera.hasPermission()) {
             State.lastError = "Camera permission not granted (run: adb shell pm grant net.andwebcam android.permission.CAMERA)"
         }
 
@@ -166,10 +186,45 @@ class CamService : Service(), HttpServer.Host {
         mainHandler.postDelayed(cameraRetry, 5000)
     }
 
+    /**
+     * Camera power policy: open it only while somebody is watching, and close
+     * it after a short grace period once the last viewer leaves.
+     */
+    private fun onClientsChanged(count: Int) {
+        mainHandler.post {
+            if (!started) return@post
+            mainHandler.removeCallbacks(idleStop)
+            if (count > 0) {
+                if (streamingEnabled && !camera.active) {
+                    Log.i(TAG, "viewer connected; opening camera")
+                    camera.start()
+                }
+            } else {
+                mainHandler.postDelayed(idleStop, 5000)
+            }
+            updateNotification()
+        }
+    }
+
+    private fun setStreaming(on: Boolean) {
+        streamingEnabled = on
+        Log.i(TAG, "streaming enabled=$on")
+        if (on) {
+            if (hub.count > 0) camera.start()
+        } else {
+            hub.disconnectAll()
+            mainHandler.removeCallbacks(idleStop)
+            camera.stop()
+        }
+        updateNotification()
+    }
+
     private fun stopEverything() {
         State.running = false
         started = false
         mainHandler.removeCallbacks(cameraRetry)
+        mainHandler.removeCallbacks(idleStop)
+        hub.disconnectAll()
         mdns?.stop()
         mdns = null
         server.stop()
@@ -204,6 +259,9 @@ class CamService : Service(), HttpServer.Host {
             "clients" to State.clients,
             "width" to sz.width,
             "height" to sz.height,
+            "streaming" to streamingEnabled,
+            "cameraActive" to camera.active,
+            "autoStartStreaming" to Prefs.autoStartStreaming,
             "lastError" to State.lastError,
         )
     }
@@ -222,11 +280,17 @@ class CamService : Service(), HttpServer.Host {
                 "orientation" -> v.toIntOrNull()?.let { Prefs.orientation = it }
                 "anonView" -> Prefs.anonView = v.toBoolean()
                 "startOnBoot" -> Prefs.startOnBoot = v.toBoolean()
+                "autoStartStreaming" -> Prefs.autoStartStreaming = v.toBoolean()
+                "streaming" -> setStreaming(v.toBoolean())
                 "serviceName" -> if (Prefs.serviceName != v.lowercase()) { Prefs.serviceName = v; restartNet = true }
                 "port" -> v.toIntOrNull()?.let { if (it != Prefs.port) { Prefs.port = it; restartNet = true } }
             }
         }
-        if (restartCamera) camera.start() else camera.applyLive()
+        if (restartCamera) {
+            if (streamingEnabled && hub.count > 0) camera.start() else camera.applyLive()
+        } else {
+            camera.applyLive()
+        }
         if (restartNet) scheduleNetRestart()
         updateNotification()
     }
@@ -234,6 +298,24 @@ class CamService : Service(), HttpServer.Host {
     override fun changePassword(newPass: String) {
         Prefs.setAdminPassword(newPass)
         updateNotification()
+    }
+
+    override fun isStreaming(): Boolean = streamingEnabled
+
+    override fun reboot(): String? {
+        val dpm = getSystemService(DevicePolicyManager::class.java)
+        val admin = ComponentName(this, AdminReceiver::class.java)
+        if (!dpm.isDeviceOwnerApp(packageName)) {
+            return "Not device owner. Enable with: adb shell dpm set-device-owner net.andwebcam/.AdminReceiver"
+        }
+        Thread {
+            try {
+                Thread.sleep(800)
+                dpm.reboot(admin)
+            } catch (_: Exception) {
+            }
+        }.start()
+        return null
     }
 
     // ---- locks / notification -----------------------------------------
@@ -252,6 +334,14 @@ class CamService : Service(), HttpServer.Host {
                 setReferenceCounted(true)
                 acquire()
             }
+            // With the screen off the Wi-Fi stack drops into power save, which
+            // makes a full-rate MJPEG stream stall and reset. Hold a high
+            // performance Wi-Fi lock for as long as the service runs.
+            @Suppress("DEPRECATION")
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "andwebcam:stream").apply {
+                setReferenceCounted(false)
+                acquire()
+            }
         }
     }
 
@@ -260,6 +350,8 @@ class CamService : Service(), HttpServer.Host {
         wakeLock = null
         try { multicastLock?.release() } catch (_: Exception) {}
         multicastLock = null
+        try { wifiLock?.release() } catch (_: Exception) {}
+        wifiLock = null
     }
 
     private fun ensureChannel() {
@@ -274,9 +366,16 @@ class CamService : Service(), HttpServer.Host {
             this, 0, Intent(this, MainActivity::class.java),
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
+        State.streaming = streamingEnabled
+        State.cameraActive = camera.active
+        val text = when {
+            !streamingEnabled -> "Streaming stopped - open ${State.url}"
+            camera.active -> "Streaming at ${State.url}"
+            else -> "Idle (no viewers) - ${State.url}"
+        }
         return Notification.Builder(this, CH_ID)
             .setContentTitle("andWebCam")
-            .setContentText("Streaming at ${State.url}")
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setOngoing(true)
             .setContentIntent(pi)

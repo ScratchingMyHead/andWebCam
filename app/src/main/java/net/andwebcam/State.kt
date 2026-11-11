@@ -11,6 +11,8 @@ object State {
     @Volatile var serviceName: String = "andwebcam"
     @Volatile var lastError: String? = null
     @Volatile var clients: Int = 0
+    @Volatile var streaming: Boolean = false
+    @Volatile var cameraActive: Boolean = false
     @Volatile var frames: Long = 0
     @Volatile var framesPerSec: Int = 0
 

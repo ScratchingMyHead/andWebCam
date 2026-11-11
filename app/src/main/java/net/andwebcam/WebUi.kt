@@ -1,0 +1,294 @@
+package net.andwebcam
+
+/** The single-page control UI served at "/". */
+object WebUi {
+    val PAGE: String = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>andWebCam</title>
+<style>
+ :root { color-scheme: dark }
+ * { box-sizing: border-box }
+ body { margin:0; font-family:system-ui,-apple-system,sans-serif; background:#111; color:#eee }
+ header { padding:10px 14px; background:#1b1b1b; display:flex; gap:12px; align-items:center; flex-wrap:wrap }
+ header h1 { font-size:16px; margin:0 }
+ .grow { flex:1 }
+ main { padding:14px }
+ .banner { display:grid; grid-template-columns:1fr 1fr; gap:0 26px; background:#1b1b1b; border-radius:8px; padding:6px 14px; margin-bottom:12px }
+ .bitem { display:flex; justify-content:space-between; gap:10px; font-size:12.5px; padding:3px 0; border-bottom:1px solid #242424 }
+ .bk { color:#888 }
+ .bv { color:#eee; font-weight:600 }
+ .content { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap }
+ .video { flex:1 1 560px; min-width:280px; min-height:220px; position:relative }
+ .video img { width:100%; background:#000; border-radius:8px; display:block }
+ .overlay { position:absolute; inset:0; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; background:#000c; border-radius:8px; color:#bbb; font-size:15px }
+ .panel { flex:0 1 320px; background:#1b1b1b; border-radius:8px; padding:14px }
+ .panel h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#8ab; margin:15px 0 6px }
+ .panel h2:first-child { margin-top:0 }
+ .row { margin:9px 0; display:flex; flex-direction:column; gap:4px }
+ label { font-size:13px; color:#bbb }
+ select,input[type=text],input[type=password],input[type=number] { background:#0d0d0d; color:#eee; border:1px solid #333; border-radius:6px; padding:7px }
+ input[type=range] { width:100% }
+ button { background:#2b6cb0; color:#fff; border:0; border-radius:6px; padding:9px 12px; cursor:pointer; font-size:13px }
+ button.secondary { background:#333 }
+ button.danger { background:#8a3030 }
+ .actions { display:flex; gap:8px; flex-wrap:wrap }
+ .hidden { display:none !important }
+ .badge { font-size:11px; padding:3px 8px; border-radius:10px; background:#2b6cb0 }
+ .badge.anon { background:#555 }
+ .badge.locked { background:#7a2f2f }
+ .err { color:#f66; font-size:12px; min-height:1.2em; margin:6px 0 0 }
+ .check { display:flex; align-items:center; gap:8px; font-size:13px; color:#bbb }
+</style>
+</head>
+<body>
+<header>
+  <h1>andWebCam</h1>
+  <span id="who" class="badge locked">...</span>
+  <span class="grow"></span>
+  <button id="loginBtn" class="secondary">Log in</button>
+  <button id="logoutBtn" class="secondary hidden">Log out</button>
+</header>
+<main>
+  <div class="banner">
+    <div class="bitem"><span class="bk">Status</span><span class="bv" id="i_state">-</span></div>
+    <div class="bitem"><span class="bk">Camera</span><span class="bv" id="i_cam">-</span></div>
+    <div class="bitem"><span class="bk">Resolution</span><span class="bv" id="i_res">-</span></div>
+    <div class="bitem"><span class="bk">Frame rate</span><span class="bv" id="i_fps">-</span></div>
+    <div class="bitem"><span class="bk">Torch</span><span class="bv" id="i_torch">-</span></div>
+    <div class="bitem"><span class="bk">Viewers</span><span class="bv" id="i_view">-</span></div>
+  </div>
+  <div class="content">
+    <div class="video">
+      <img id="vid" alt="camera stream">
+      <div id="stopped" class="overlay hidden"><div>Streaming is stopped</div><div id="stoppedHint" style="font-size:12px"></div></div>
+    </div>
+    <div class="panel hidden" id="admin">
+      <h2>Streaming</h2>
+      <div class="actions">
+        <button id="toggle">Stop streaming</button>
+        <button id="reboot" class="danger">Restart phone</button>
+      </div>
+      <p class="err" id="actionMsg"></p>
+
+      <h2>Camera</h2>
+      <div class="row">
+        <label>Camera</label>
+        <select id="s_facing"><option value="back">Back</option><option value="front">Front</option></select>
+      </div>
+      <div class="row">
+        <label>Resolution</label>
+        <select id="s_res"></select>
+      </div>
+      <div class="row">
+        <label>Frame rate: <span id="v_fps"></span> fps</label>
+        <select id="s_fps"></select>
+      </div>
+      <div class="row">
+        <label>JPEG quality: <span id="v_q"></span></label>
+        <input id="s_q" type="range" min="10" max="100" step="5">
+      </div>
+      <div class="row">
+        <label>Zoom: <span id="v_zoom"></span>x</label>
+        <input id="s_zoom" type="range" min="1" max="4" step="0.1">
+      </div>
+      <div class="row">
+        <label>Orientation</label>
+        <select id="s_orient">
+          <option value="0">Landscape</option>
+          <option value="90">Portrait</option>
+          <option value="180">Landscape (180)</option>
+          <option value="270">Portrait (270)</option>
+        </select>
+      </div>
+      <div class="row">
+        <label class="check"><input id="s_torch" type="checkbox"> Torch / LED</label>
+      </div>
+
+      <h2>Access</h2>
+      <div class="row">
+        <label class="check"><input id="s_anon" type="checkbox"> Allow anonymous view-only access</label>
+      </div>
+      <div class="row">
+        <label class="check"><input id="auto" type="checkbox"> Start streaming when the service starts</label>
+      </div>
+
+      <h2>Service</h2>
+      <div class="row">
+        <label>Name (host becomes NAME.local)</label>
+        <input id="s_name" type="text">
+      </div>
+      <div class="row">
+        <label>HTTPS port</label>
+        <input id="s_port" type="number" min="1" max="65535">
+      </div>
+      <button id="apply">Apply service settings</button>
+      <p class="err">Changing the name or port restarts the server; reconnect at the new address.</p>
+
+      <h2>Admin password</h2>
+      <div class="row">
+        <label>New password</label>
+        <input id="p_new" type="password">
+      </div>
+      <button id="pwset">Change password</button>
+      <p class="err" id="pwmsg">Once changed, the phone screen stops displaying the password.</p>
+    </div>
+    <div class="panel hidden" id="loginForm">
+      <h2>Log in</h2>
+      <div class="row">
+        <label>Username</label>
+        <input id="l_user" type="text" value="admin">
+      </div>
+      <div class="row">
+        <label>Password</label>
+        <input id="l_pass" type="password">
+      </div>
+      <button id="doLogin">Log in</button>
+      <p id="loginErr" class="err"></p>
+    </div>
+  </div>
+</main>
+<script>
+function el(id) { return document.getElementById(id); }
+function post(path, obj) {
+  return fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(obj)
+  }).then(function(r) { return r.json().catch(function(){ return {}; }); });
+}
+function setSetting(key, value) {
+  var o = {}; o[key] = value;
+  post('/api/settings', o).then(function(r) {
+    if (r.ok === false) { alert('Not authorized'); }
+    setTimeout(refresh, 250);
+  });
+}
+var showingVideo = null;
+var vidRetry = null;
+function startVideo() {
+  var img = el('vid');
+  img.style.display = 'block';
+  img.src = '/video?t=' + Date.now();
+  el('stopped').classList.add('hidden');
+}
+function stopVideo() {
+  clearTimeout(vidRetry);
+  var img = el('vid');
+  img.removeAttribute('src');
+  img.style.display = 'none';
+  el('stopped').classList.remove('hidden');
+}
+function applyVideo(s) {
+  var want = !!s.streaming;
+  if (showingVideo === want) { return; }
+  showingVideo = want;
+  if (want) { startVideo(); } else { stopVideo(); }
+}
+// The stream can be cut by the network; reconnect instead of showing a dead image.
+el('vid').onerror = function() {
+  if (window.S && window.S.streaming) {
+    clearTimeout(vidRetry);
+    vidRetry = setTimeout(startVideo, 1000);
+  }
+};
+function refresh() {
+  fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
+    window.S = s;
+    el('who').textContent = s.admin ? 'admin' : (s.anonView ? 'view-only' : 'locked');
+    el('who').className = 'badge ' + (s.admin ? '' : (s.anonView ? 'anon' : 'locked'));
+    el('i_state').textContent = !s.streaming ? 'Stopped' : (s.cameraActive ? 'Streaming' : 'Idle (no viewers)');
+    el('i_cam').textContent = s.facing || '-';
+    el('i_res').textContent = (s.width || '?') + 'x' + (s.height || '?');
+    el('i_fps').textContent = (s.fpsActive || 0) + ' / ' + (s.fps || '?') + ' fps';
+    el('i_torch').textContent = s.torch ? (s.torchAvailable ? 'on' : 'n/a') : 'off';
+    el('i_view').textContent = (s.clients || 0);
+    applyVideo(s);
+
+    el('loginBtn').classList.toggle('hidden', !!s.admin);
+    el('logoutBtn').classList.toggle('hidden', !s.admin);
+    el('admin').classList.toggle('hidden', !s.admin);
+    if (!s.admin) { return; }
+
+    el('toggle').textContent = s.streaming ? 'Stop streaming' : 'Start streaming';
+    if (el('s_res').options.length !== (s.resolutions || []).length) {
+      el('s_res').innerHTML = '';
+      (s.resolutions || []).forEach(function(x) { var o = document.createElement('option'); o.value = x; o.textContent = x; el('s_res').appendChild(o); });
+    }
+    if (el('s_fps').options.length !== (s.fpsOptions || []).length) {
+      el('s_fps').innerHTML = '';
+      (s.fpsOptions || []).forEach(function(x) { var o = document.createElement('option'); o.value = x; o.textContent = x; el('s_fps').appendChild(o); });
+    }
+    if (document.activeElement !== el('s_facing')) { el('s_facing').value = s.facing || 'back'; }
+    if (document.activeElement !== el('s_res')) { el('s_res').value = (s.width || '') + 'x' + (s.height || ''); }
+    if (document.activeElement !== el('s_fps')) { el('s_fps').value = String(s.fps || 15); }
+    if (document.activeElement !== el('s_q')) { el('s_q').value = s.quality || 80; el('v_q').textContent = s.quality || 80; }
+    if (document.activeElement !== el('s_zoom')) { el('s_zoom').max = String(s.maxZoom || 4); el('s_zoom').value = s.zoom || 1; el('v_zoom').textContent = Math.round((s.zoom || 1) * 10) / 10; }
+    if (document.activeElement !== el('s_orient')) { el('s_orient').value = String(s.orientation || 0); }
+    if (document.activeElement !== el('s_name')) { el('s_name').value = s.serviceName || 'andwebcam'; }
+    if (document.activeElement !== el('s_port')) { el('s_port').value = s.port || 8443; }
+    if (document.activeElement !== el('s_torch')) { el('s_torch').checked = !!s.torch && !!s.torchAvailable; }
+    el('s_torch').disabled = !s.torchAvailable;
+    if (document.activeElement !== el('s_anon')) { el('s_anon').checked = !!s.anonView; }
+    if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
+  }).catch(function() {
+    el('i_state').textContent = 'unreachable';
+  });
+}
+el('s_facing').onchange = function() { setSetting('facing', this.value); };
+el('s_res').onchange = function() { setSetting('resolution', this.value); };
+el('s_fps').onchange = function() { setSetting('fps', this.value); };
+el('s_q').oninput = function() { el('v_q').textContent = this.value; };
+el('s_q').onchange = function() { setSetting('quality', this.value); };
+el('s_zoom').oninput = function() { el('v_zoom').textContent = Math.round(parseFloat(this.value) * 10) / 10; };
+el('s_zoom').onchange = function() { setSetting('zoom', this.value); };
+el('s_orient').onchange = function() { setSetting('orientation', this.value); };
+el('s_torch').onchange = function() { setSetting('torch', this.checked); };
+el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
+el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
+el('toggle').onclick = function() {
+  var on = !(window.S && window.S.streaming);
+  post('/api/settings', { streaming: on }).then(function(r) {
+    if (r.ok === false) { alert('Not authorized'); return; }
+    el('actionMsg').textContent = on ? 'Streaming started' : 'Streaming stopped';
+    setTimeout(refresh, 250);
+  });
+};
+el('reboot').onclick = function() {
+  if (!confirm('Restart the phone now?')) { return; }
+  el('actionMsg').textContent = 'Rebooting...';
+  post('/api/reboot', {}).then(function(r) {
+    if (r.ok === false) { el('actionMsg').textContent = r.error || 'Reboot failed'; }
+  });
+};
+el('apply').onclick = function() {
+  post('/api/settings', { serviceName: el('s_name').value, port: el('s_port').value }).then(function(r) {
+    if (r.ok === false) { alert('Not authorized'); }
+  });
+};
+el('pwset').onclick = function() {
+  var p = el('p_new').value;
+  if (p.length < 4) { el('pwmsg').textContent = 'Too short'; return; }
+  post('/api/password', { password: p }).then(function(r) {
+    el('pwmsg').textContent = r.ok ? 'Password changed.' : 'Failed.';
+    el('p_new').value = '';
+    setTimeout(refresh, 300);
+  });
+};
+el('loginBtn').onclick = function() { el('loginForm').classList.toggle('hidden'); };
+el('logoutBtn').onclick = function() { post('/api/logout', {}).then(function() { location.reload(); }); };
+el('doLogin').onclick = function() {
+  post('/api/login', { user: el('l_user').value, pass: el('l_pass').value }).then(function(r) {
+    if (r.ok) { location.reload(); } else { el('loginErr').textContent = 'Wrong username or password'; }
+  });
+};
+refresh();
+setInterval(refresh, 2000);
+</script>
+</body>
+</html>
+"""
+}

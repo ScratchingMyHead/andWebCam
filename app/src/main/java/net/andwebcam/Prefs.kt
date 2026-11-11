@@ -28,8 +28,10 @@ object Prefs {
     private const val KEY_ZOOM = "zoom"
     private const val KEY_ORIENTATION = "orientation"
     private const val KEY_ANON_VIEW = "anon_view"
+    private const val KEY_AUTO_START_STREAM = "auto_start_stream"
     private const val KEY_START_ON_BOOT = "start_on_boot"
     private const val KEY_ENABLED = "enabled"
+    private const val KEY_BATTERY_ASKED = "battery_asked"
 
     private const val KEY_ADMIN_USER = "admin_user"
     private const val KEY_PASS_PLAIN = "pass_plain"
@@ -110,6 +112,11 @@ object Prefs {
         get() = sp.getBoolean(KEY_ANON_VIEW, false)
         set(v) = edit { putBoolean(KEY_ANON_VIEW, v) }
 
+    /** Whether streaming is enabled automatically when the service starts. */
+    var autoStartStreaming: Boolean
+        get() = sp.getBoolean(KEY_AUTO_START_STREAM, true)
+        set(v) = edit { putBoolean(KEY_AUTO_START_STREAM, v) }
+
     var startOnBoot: Boolean
         get() = sp.getBoolean(KEY_START_ON_BOOT, true)
         set(v) = edit { putBoolean(KEY_START_ON_BOOT, v) }
@@ -117,6 +124,11 @@ object Prefs {
     var enabled: Boolean
         get() = sp.getBoolean(KEY_ENABLED, true)
         set(v) = edit { putBoolean(KEY_ENABLED, v) }
+
+    /** True once the battery-optimisation exemption dialog has been shown. */
+    var batteryPromptAsked: Boolean
+        get() = sp.getBoolean(KEY_BATTERY_ASKED, false)
+        set(v) = edit { putBoolean(KEY_BATTERY_ASKED, v) }
 
     // ---- admin credentials ------------------------------------------------
 
