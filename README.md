@@ -42,19 +42,32 @@ zoom, orientation, torch, port, service name, automatic start — is configured
 from the web page at the address shown on the phone screen. No PC, cable or
 developer tools are needed to install or configure it.
 
-To uninstall, remove the app the usual way. If it was ever made device owner
-(see [Restarting the phone](#restarting-the-phone)) the owner must be cleared
-first, which is the one thing that cannot be done from the phone itself.
+To uninstall, remove the app the usual way. The one exception is a phone where
+it was made **device owner** (see [Restarting the phone](#restarting-the-phone)):
+Android then refuses to uninstall it until ownership is given up, which is done
+with the **Remove ownership** button at the bottom of the phone's own screen.
 
 ## Restarting the phone
 
 The web UI has a **Restart phone** button. Android gives ordinary apps no way to
 reboot the device, so the button only works when andWebCam is the phone's
 **device owner** — a management role that Android grants only through device
-provisioning (a device management service, or the `adb` command in the developer
-notes below). On a normal install the button therefore reports that the phone is
-not managed, and you restart it with the power button instead. Nothing else in
-the app depends on it.
+provisioning (a device management service, or the command below). On a normal
+install the button therefore reports that the phone is not managed, and you
+restart it with the power button instead. Nothing else in the app depends on it.
+
+To enable it, install andWebCam and run this once, from a machine with a USB
+cable (the phone must have no accounts, and this is the only step that needs
+`adb`):
+
+```
+adb shell dpm set-device-owner net.andwebcam/.AdminReceiver
+```
+
+Once that succeeds the phone screen shows **Remove ownership** next to the words
+*disables restart and allows uninstall*. That button hands the role back, after
+which the app can be uninstalled normally — so no further `adb` commands are
+needed to get rid of it.
 
 ## Using it
 
@@ -163,16 +176,10 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 adb shell pm grant net.andwebcam android.permission.CAMERA
 ```
 
-Making the app device owner so the web UI can restart the phone. The phone must
-have no accounts, and the app must not have been made device admin yet:
-
-```
-adb shell dpm set-device-owner net.andwebcam/.AdminReceiver
-```
-
-Clearing that again, which is required before the app can be uninstalled:
-
-```
-adb shell dpm remove-active-admin net.andwebcam/.AdminReceiver
-```
+Making the app device owner so the web UI can restart the phone is the
+`dpm set-device-owner` command under
+[Restarting the phone](#restarting-the-phone). To undo it on a normally
+installed copy use the phone's **Remove ownership** button;
+`dpm remove-active-admin` refuses with *"Attempt to remove non-test admin"*
+unless the app was installed as test-only (`adb install -t`).
 

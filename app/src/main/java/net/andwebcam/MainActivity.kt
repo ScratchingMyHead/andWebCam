@@ -2,6 +2,8 @@ package net.andwebcam
 
 import android.Manifest
 import android.app.Activity
+import android.app.AlertDialog
+import android.app.admin.DevicePolicyManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Typeface
@@ -13,6 +15,7 @@ import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.util.TypedValue
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
@@ -35,6 +38,8 @@ class MainActivity : Activity() {
     private lateinit var urlView: TextView
     private lateinit var credsView: TextView
     private lateinit var errorView: TextView
+    private lateinit var ownerRow: View
+    private lateinit var ownerMsg: TextView
     private var fingerprint = ""
 
     private val tick = object : Runnable {
@@ -142,6 +147,36 @@ class MainActivity : Activity() {
 
         errorView.text = State.lastError?.let { "Last error: $it" } ?: ""
         errorView.visibility = if (State.lastError == null) View.GONE else View.VISIBLE
+
+        val dpm = getSystemService(DevicePolicyManager::class.java)
+        ownerRow.visibility =
+            if (dpm?.isDeviceOwnerApp(packageName) == true) View.VISIBLE else View.GONE
+    }
+
+    /**
+     * Giving up device ownership is the only way a normally installed copy can be
+     * uninstalled, so it is offered on the phone itself rather than over the web.
+     * Restart phone stops working once it is done.
+     */
+    private fun removeOwnership() {
+        val dpm = getSystemService(DevicePolicyManager::class.java)
+        ownerMsg.text = try {
+            dpm.clearDeviceOwnerApp(packageName)
+            "Ownership removed. andWebCam can now be uninstalled."
+        } catch (e: Exception) {
+            "Could not remove ownership: ${e.message}"
+        }
+        ownerMsg.visibility = View.VISIBLE
+        update()
+    }
+
+    private fun confirmRemoveOwnership() {
+        AlertDialog.Builder(this)
+            .setTitle("Remove ownership?")
+            .setMessage("Restart phone will stop working. andWebCam can then be uninstalled normally.")
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Remove") { _, _ -> removeOwnership() }
+            .show()
     }
 
     private fun buildUi(): View {
@@ -190,9 +225,31 @@ class MainActivity : Activity() {
             root.addView(text(fingerprint, 12f).apply { typeface = Typeface.MONOSPACE })
         }
 
+        // Only shown while this app is the phone's device owner.
+        ownerMsg = text("", 13f).apply { visibility = View.GONE }
+        ownerRow = buildOwnerRow()
+        root.addView(spacer())
+        root.addView(ownerRow)
+        root.addView(ownerMsg)
+
         val scroll = ScrollView(this)
         scroll.addView(root, ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
         return scroll
+    }
+
+    private fun buildOwnerRow(): View {
+        val row = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        row.addView(Button(this).apply {
+            text = "Remove ownership"
+            setOnClickListener { confirmRemoveOwnership() }
+        })
+        row.addView(text("disables restart and allows uninstall", 13f).apply {
+            setPadding(dp(12), 0, 0, 0)
+        })
+        return row
     }
 
     private fun text(s: String, size: Float, bold: Boolean = false): TextView =
