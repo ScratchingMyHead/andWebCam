@@ -10,7 +10,9 @@ import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.wifi.WifiManager
 import android.os.Build
+import android.os.Handler
 import android.os.IBinder
+import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
 import java.net.Inet4Address
@@ -55,6 +57,8 @@ class CamService : Service(), HttpServer.Host {
     private var scheduler: ScheduledExecutorService? = null
     private var lastFrameCount = 0L
     private var started = false
+    private val mainHandler = Handler(Looper.getMainLooper())
+    private val cameraRetry = Runnable { if (started) camera.start() }
 
     override fun onCreate() {
         super.onCreate()
@@ -66,7 +70,11 @@ class CamService : Service(), HttpServer.Host {
                 if (State.lastError != null) State.lastError = null
                 hub.broadcast(jpeg)
             },
-            onError = { msg -> State.lastError = msg; Log.w(TAG, msg) },
+            onError = { msg ->
+                State.lastError = msg
+                Log.w(TAG, msg)
+                scheduleCameraRetry()
+            },
         )
         server = HttpServer(this, hub, this)
         ensureChannel()
@@ -152,9 +160,16 @@ class CamService : Service(), HttpServer.Host {
         }.start()
     }
 
+    /** Unattended safety net: if the camera errors, try again shortly. */
+    private fun scheduleCameraRetry() {
+        mainHandler.removeCallbacks(cameraRetry)
+        mainHandler.postDelayed(cameraRetry, 5000)
+    }
+
     private fun stopEverything() {
         State.running = false
         started = false
+        mainHandler.removeCallbacks(cameraRetry)
         mdns?.stop()
         mdns = null
         server.stop()

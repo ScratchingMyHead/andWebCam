@@ -5,7 +5,6 @@ import android.content.Context
 import android.content.pm.PackageManager
 import android.graphics.ImageFormat
 import android.graphics.Rect
-import android.graphics.SurfaceTexture
 import android.hardware.camera2.CameraCaptureSession
 import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
@@ -19,7 +18,6 @@ import android.os.HandlerThread
 import android.util.Log
 import android.util.Range
 import android.util.Size
-import android.view.Surface
 import kotlin.math.abs
 
 /**
@@ -52,8 +50,6 @@ class CameraController(
     private var device: CameraDevice? = null
     private var session: CameraCaptureSession? = null
     private var reader: ImageReader? = null
-    private var previewTexture: SurfaceTexture? = null
-    private var previewSurface: Surface? = null
 
     private var chars: CameraCharacteristics? = null
 
@@ -199,29 +195,18 @@ class CameraController(
     }
 
     private fun createSession(d: CameraDevice) {
-        val c = chars ?: return
-        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return
-
-        // A drained dummy preview surface improves compatibility with devices
-        // that refuse a JPEG-only session.
-        val previewSize = map.getOutputSizes(SurfaceTexture::class.java)
-            ?.minByOrNull { it.width * it.height } ?: Size(320, 240)
-        val tex = SurfaceTexture(0)
-        tex.setDefaultBufferSize(previewSize.width, previewSize.height)
-        tex.setOnFrameAvailableListener({ st -> try { st.updateTexImage() } catch (_: Exception) {} }, handler)
-        val pSurface = Surface(tex)
-        previewTexture = tex
-        previewSurface = pSurface
-
         val r = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
         r.setOnImageAvailableListener({ rd -> onImage(rd) }, handler)
         reader = r
 
+        // JPEG-only session. Adding a preview SurfaceTexture here (without a GL
+        // consumer) starved the Exynos preview pipe and crashed cameraserver with
+        // a null-deref in ExynosCameraFrame::searchEntityByPipeId.
         try {
-            d.createCaptureSession(listOf(r.surface, pSurface), object : CameraCaptureSession.StateCallback() {
+            d.createCaptureSession(listOf(r.surface), object : CameraCaptureSession.StateCallback() {
                 override fun onConfigured(s: CameraCaptureSession) {
                     session = s
-                    Log.i(TAG, "capture session configured (surfaces=2)")
+                    Log.i(TAG, "capture session configured (surfaces=1)")
                     try {
                         s.setRepeatingRequest(buildRequest(d, s), null, handler)
                         Log.i(TAG, "repeating request set")
@@ -257,7 +242,6 @@ class CameraController(
     private fun buildRequest(d: CameraDevice, s: CameraCaptureSession): CaptureRequest {
         val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         reader?.let { b.addTarget(it.surface) }
-        previewSurface?.let { b.addTarget(it) }
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
         b.set(CaptureRequest.JPEG_QUALITY, quality.coerceIn(1, 100).toByte())
         b.set(CaptureRequest.JPEG_ORIENTATION, orientation)
@@ -300,13 +284,9 @@ class CameraController(
         try { session?.close() } catch (_: Exception) {}
         try { device?.close() } catch (_: Exception) {}
         try { reader?.close() } catch (_: Exception) {}
-        try { previewSurface?.release() } catch (_: Exception) {}
-        try { previewTexture?.release() } catch (_: Exception) {}
         session = null
         device = null
         reader = null
-        previewSurface = null
-        previewTexture = null
     }
 
     private fun findCameraId(facing: String): String {

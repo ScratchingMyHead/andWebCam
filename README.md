@@ -102,4 +102,9 @@ ffmpeg -i https://andwebcam.local:8443/video -c:v rawvideo -pix_fmt yuv420p -f v
 * This particular device (Samsung SM-G390Y) violates the camera2 spec by
   reporting AE fps ranges in plain fps instead of fps×1000; the code detects
   the scale automatically.
+* The capture session deliberately targets **only** the JPEG ImageReader. Adding
+  a preview `SurfaceTexture` without a GL consumer starves the Exynos preview
+  pipe and crashes `cameraserver` (`ExynosCameraFrame::searchEntityByPipeId`
+  null-deref) after a few seconds. The camera is also auto-reopened a few
+  seconds after any error, so a HAL hiccup self-heals on an unattended phone.
 * No AndroidX or third-party dependencies are used, to keep the build small.
