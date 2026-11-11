@@ -52,6 +52,7 @@ object WebUi {
   <span class="grow"></span>
   <button id="loginBtn" class="secondary">Log in</button>
   <button id="logoutBtn" class="secondary hidden">Log out</button>
+  <button id="paneToggle" class="secondary hidden" title="Hide the settings pane">Settings</button>
 </header>
 <main>
   <div class="banner">
@@ -211,7 +212,7 @@ function refresh() {
 
     el('loginBtn').classList.toggle('hidden', !!s.admin);
     el('logoutBtn').classList.toggle('hidden', !s.admin);
-    el('admin').classList.toggle('hidden', !s.admin);
+    applyPane();
     if (!s.admin) { return; }
 
     el('toggle').textContent = s.streaming ? 'Stop streaming' : 'Start streaming';
@@ -278,6 +279,27 @@ el('pwset').onclick = function() {
     el('p_new').value = '';
     setTimeout(refresh, 300);
   });
+};
+// The settings pane can be hidden so the video fills the window; the choice is remembered.
+function panePref(v) {
+  try {
+    if (v === undefined) { return localStorage.getItem('awcPane'); }
+    localStorage.setItem('awcPane', v);
+  } catch (e) {}
+  return null;
+}
+function applyPane() {
+  var admin = !!(window.S && window.S.admin);
+  var hidden = panePref() === 'hidden';
+  el('admin').classList.toggle('hidden', hidden || !admin);
+  var t = el('paneToggle');
+  t.classList.toggle('hidden', !admin);
+  t.title = hidden ? 'Show the settings pane' : 'Hide the settings pane';
+  t.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+}
+el('paneToggle').onclick = function() {
+  panePref(panePref() === 'hidden' ? 'shown' : 'hidden');
+  applyPane();
 };
 el('loginBtn').onclick = function() { el('loginForm').classList.toggle('hidden'); };
 el('logoutBtn').onclick = function() { post('/api/logout', {}).then(function() { location.reload(); }); };

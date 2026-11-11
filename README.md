@@ -61,6 +61,10 @@ Open `https://andwebcam.local:8443/` (or the IP shown on the phone). The page
 shows a narrow status banner, the live stream (as large as the window allows)
 and, when logged in, all the controls.
 
+The **Settings** button in the header shows and hides the settings pane, so the
+video can take the full width when you are only watching. The choice is
+remembered in that browser.
+
 ### Streaming, idle and power
 
 * **Start / Stop streaming** buttons turn the stream on and off. While stopped,
