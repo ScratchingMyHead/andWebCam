@@ -189,11 +189,12 @@ function post(path, obj) {
 }
 function setSetting(key, value) {
   var o = {}; o[key] = value;
+  if (CAMERA_KEYS[key]) { showBusy(); hideBusySoon(6000); }
   post('/api/settings', o).then(function(r) {
-    if (r.ok === false) { alert('Not authorized'); return; }
-    startApply(o);
+    if (r.ok === false) { alert('Not authorized'); hideBusy(); return; }
+    if (CAMERA_KEYS[key]) { hideBusySoon(1200); }
     setTimeout(refresh, 250);
-  });
+  }).catch(function() { hideBusy(); });
 }
 var showingVideo = null;
 var vidRetry = null;
@@ -323,24 +324,23 @@ el('video').addEventListener('wheel', function(e) {
 el('vid').addEventListener('load', updatePan);
 window.addEventListener('resize', updatePan);
 // Camera changes take a moment to show up in the stream and there is no
-// dependable signal for exactly when they do, so show a spinner for a moment
-// after any camera setting is sent.
+// dependable signal for exactly when they do, so show a spinner from the moment
+// the control is used until shortly after the phone acknowledges it.
 var CAMERA_KEYS = { facing:1, resolution:1, fps:1, quality:1, zoom:1, orientation:1, torch:1 };
 var busyTimer = null;
-function flashBusy() {
+function showBusy() {
   el('busy').classList.remove('hidden');
   el('busyText').textContent = 'Applying...';
   el('video').classList.add('applying');
-  clearTimeout(busyTimer);
-  busyTimer = setTimeout(function() {
-    el('busy').classList.add('hidden');
-    el('video').classList.remove('applying');
-  }, 1200);
 }
-function startApply(o) {
-  for (var k in o) {
-    if (CAMERA_KEYS[k]) { flashBusy(); return; }
-  }
+function hideBusy() {
+  clearTimeout(busyTimer);
+  el('busy').classList.add('hidden');
+  el('video').classList.remove('applying');
+}
+function hideBusySoon(ms) {
+  clearTimeout(busyTimer);
+  busyTimer = setTimeout(hideBusy, ms);
 }
 function refresh() {
   fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {

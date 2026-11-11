@@ -81,7 +81,8 @@ the browser too.
 
 Camera settings (resolution, camera, orientation, frame rate, quality, zoom) do
 not take effect instantly. A small **Applying...** spinner appears over the video
-for a moment after one is sent, so it is clear the change is on its way.
+as soon as such a control is used, and stays until the phone acknowledges the
+change, so it is clear something is happening.
 
 ### Streaming, idle and power
 
