@@ -165,9 +165,8 @@ The web page reconnects the video element by itself if the stream is cut.
   trusted LAN, not to authenticate the device cryptographically.
 * Orientation is applied as the JPEG's EXIF orientation, which browsers and
   ffmpeg honour without any transcoding cost on the phone.
-* This particular device (Samsung SM-G390Y) violates the camera2 spec by
-  reporting AE fps ranges in plain fps instead of fps×1000; the code detects
-  the scale automatically.
+* Some devices violate the camera2 spec by reporting AE fps ranges in plain
+  fps instead of fps×1000; the code detects the scale automatically.
 * The capture session deliberately targets **only** the JPEG ImageReader. Adding
   a preview `SurfaceTexture` without a GL consumer starves the Exynos preview
   pipe and crashes `cameraserver` (`ExynosCameraFrame::searchEntityByPipeId`

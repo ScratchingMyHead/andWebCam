@@ -321,8 +321,8 @@ class CameraController(
     }
 
     /**
-     * Some vendors (this Samsung among them) report the AE fps ranges in plain
-     * frames per second instead of the spec's fps*1000, so we detect the scale.
+     * Some vendors report the AE fps ranges in plain frames per second instead
+     * of the spec's fps*1000, so we detect the scale.
      */
     private fun fpsScaleMilli(c: CameraCharacteristics): Boolean {
         val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: return true
