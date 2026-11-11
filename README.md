@@ -6,8 +6,7 @@ advertises itself over mDNS/DNS-SD so the desktop can find it and resolve
 `andwebcam.local` without any manual configuration.
 
 Designed for a phone that you don't have physical access to: it runs as a
-foreground service, starts at boot, and every setting is changeable from the
-web UI.
+foreground service, starts at boot, and is configured via the web UI.
 
 ## What runs where
 
@@ -24,69 +23,42 @@ web UI.
                               avahi-resolve andwebcam.local -> <ip>
 ```
 
-## Building
+## Installing
 
-```
-scripts/make-cert.sh          # regenerate the bundled TLS cert (only if needed)
-./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell pm grant net.andwebcam android.permission.CAMERA
-```
+Copy the APK to the phone and tap it (or open it from a file manager). Android
+asks once for permission to install apps from that source; allow it, install,
+then open **andWebCam**.
 
-The camera permission has to be granted once. If the phone is unattended you
-can grant it over adb exactly as above; otherwise accept the prompts on first
-launch (camera, notifications on Android 13+, and a battery-optimisation
-exemption so the stream survives Doze).
+On first launch the app requests everything it needs, as normal system dialogs:
 
-### Restarting the phone from the web UI
+* **Camera** — required; the stream cannot start without it.
+* **Notifications** (Android 13+) — the service runs as a foreground service and
+  needs a visible notification.
+* **Ignore battery optimisation** — so the stream keeps running with the screen
+  off instead of being dozed.
 
-Android gives no way for an ordinary app to reboot the device. andWebCam uses
-device owner, which you set once over adb (the phone must have no accounts):
+Accept all three. Everything else — camera, resolution, frame rate, quality,
+zoom, orientation, torch, port, service name, automatic start — is configured
+from the web page at the address shown on the phone screen. No PC, cable or
+developer tools are needed to install or configure it.
 
-```
-adb shell dpm set-device-owner net.andwebcam/.AdminReceiver
-```
+To uninstall, remove the app the usual way. If it was ever made device owner
+(see [Restarting the phone](#restarting-the-phone)) the owner must be cleared
+first, which is the one thing that cannot be done from the phone itself.
 
-The control page's **Restart phone** button then calls
-`DevicePolicyManager.reboot()`. Without device owner the button reports that
-error instead. Removing the app again requires clearing the owner first:
+## Restarting the phone
 
-```
-adb shell dpm remove-active-admin net.andwebcam/.AdminReceiver
-```
+The web UI has a **Restart phone** button. Android gives ordinary apps no way to
+reboot the device, so the button only works when andWebCam is the phone's
+**device owner** — a management role that Android grants only through device
+provisioning (a device management service, or the `adb` command in the developer
+notes below). On a normal install the button therefore reports that the phone is
+not managed, and you restart it with the power button instead. Nothing else in
+the app depends on it.
 
 ## Using it
 
-Open `https://andwebcam.local:8443/` (or the IP shown on the phone). The page
-shows a narrow status banner, the live stream (as large as the window allows)
-and, when logged in, all the controls.
-
-The **Settings** button in the header (and the **»** button at the right of the
-panel's action row) shows and hides the settings pane, so the video can take the
-full width when you are only watching. The choice is remembered in that browser.
-
-While the stream is connecting — after a reload, or while it reconnects after a
-drop — the video area shows *Loading video...* instead of a broken image, and
-the picture appears as soon as the first frame has arrived.
-
-The header also has four scaling buttons for the video:
-
-| Button | Meaning                                                  |
-|--------|----------------------------------------------------------|
-| `Fit`  | fit the whole frame into the viewing area (default)      |
-| `W`    | fit the width, may crop vertically                        |
-| `H`    | fit the height, may crop horizontally                     |
-| `1:1`  | actual pixels, no scaling                                 |
-
-When the picture is larger than the viewing area it is clipped to it and can be
-dragged with the mouse, or scrolled with the wheel, to pan; at an edge the wheel
-scrolls the page again. Switching mode re-centres it. The mode is remembered in
-the browser too.
-
-Camera settings (resolution, camera, orientation, frame rate, quality, zoom) do
-not take effect instantly. A small **Applying...** spinner appears over the video
-as soon as such a control is used, and stays until the phone acknowledges the
-change, so it is clear something is happening.
+Open `https://andwebcam.local:8443/` (or the IP shown on the phone).
 
 ### Streaming, idle and power
 
@@ -160,8 +132,6 @@ ffmpeg -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
        -i "https://admin:PASSWORD@andwebcam.local:8443/video" ...
 ```
 
-The web page reconnects the video element by itself if the stream is cut.
-
 ## Notes / quirks
 
 * The bundled TLS certificate is self-signed with SAN `andwebcam.local`
@@ -170,16 +140,39 @@ The web page reconnects the video element by itself if the stream is cut.
   trusted LAN, not to authenticate the device cryptographically.
 * Orientation is applied as the JPEG's EXIF orientation, which browsers and
   ffmpeg honour without any transcoding cost on the phone.
-* Some devices violate the camera2 spec by reporting AE fps ranges in plain
-  fps instead of fps×1000; the code detects the scale automatically.
-* The capture session deliberately targets **only** the JPEG ImageReader. Adding
-  a preview `SurfaceTexture` without a GL consumer starves the Exynos preview
-  pipe and crashes `cameraserver` (`ExynosCameraFrame::searchEntityByPipeId`
-  null-deref) after a few seconds. The camera is also auto-reopened a few
-  seconds after any error, so a HAL hiccup self-heals on an unattended phone.
-* No AndroidX or third-party dependencies are used, to keep the build small.
 * The service holds a high-performance Wi-Fi lock and a partial wake lock, so
   the stream keeps running at full rate with the screen off.
 * A viewer connection can be reset by the network; the hub drops the client
   after three failed writes, the camera closes a few seconds later, and the web
   page or ffmpeg reconnect wakes it up again.
+
+## Developer notes
+
+Building from source:
+
+```
+scripts/make-cert.sh          # regenerate the bundled TLS cert (only if needed)
+./gradlew assembleDebug
+```
+
+Installing straight to a phone on USB (equivalent to tapping the APK, but also
+grants the camera permission up front, which is handy for an unattended phone):
+
+```
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb shell pm grant net.andwebcam android.permission.CAMERA
+```
+
+Making the app device owner so the web UI can restart the phone. The phone must
+have no accounts, and the app must not have been made device admin yet:
+
+```
+adb shell dpm set-device-owner net.andwebcam/.AdminReceiver
+```
+
+Clearing that again, which is required before the app can be uninstalled:
+
+```
+adb shell dpm remove-active-admin net.andwebcam/.AdminReceiver
+```
+

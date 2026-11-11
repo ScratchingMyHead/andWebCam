@@ -143,7 +143,7 @@ class CamService : Service(), HttpServer.Host {
         startNetworking()
 
         if (!camera.hasPermission()) {
-            State.lastError = "Camera permission not granted (run: adb shell pm grant net.andwebcam android.permission.CAMERA)"
+            State.lastError = "Camera permission not granted. Allow the camera for andWebCam in the phone's app settings."
         }
 
         if (scheduler == null) {
@@ -306,7 +306,7 @@ class CamService : Service(), HttpServer.Host {
         val dpm = getSystemService(DevicePolicyManager::class.java)
         val admin = ComponentName(this, AdminReceiver::class.java)
         if (!dpm.isDeviceOwnerApp(packageName)) {
-            return "Not device owner. Enable with: adb shell dpm set-device-owner net.andwebcam/.AdminReceiver"
+            return "This phone is not managed by andWebCam, so it cannot be restarted from here. Use its power button."
         }
         Thread {
             try {
