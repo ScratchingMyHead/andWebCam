@@ -23,6 +23,10 @@ foreground service, starts at boot, and is configured via the web UI.
                               avahi-resolve andwebcam.local -> <ip>
 ```
 
+## Download
+
+APKs for every version: [github.com/ScratchingMyHead/andWebCam/releases](https://github.com/ScratchingMyHead/andWebCam/releases).
+
 ## Installing
 
 Copy the APK to the phone and tap it (or open it from a file manager). Android
