@@ -11,6 +11,8 @@ import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CameraMetadata
 import android.hardware.camera2.CaptureRequest
+import android.hardware.camera2.CaptureResult
+import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.ImageReader
 import android.os.Handler
@@ -38,6 +40,8 @@ class CameraController(
         val maxZoom: Float,
         val torchAvailable: Boolean,
         val fpsOptions: List<Int>,
+        /** Highest rate the JPEG path advertises for the current size; 0 = unstated. */
+        val maxFps: Int = 0,
     )
 
     companion object { private const val TAG = "andWebCam" }
@@ -66,7 +70,7 @@ class CameraController(
     private var zoom = 1.0f
     private var orientation = 0
 
-    private var lastFrameAt = 0L
+    private var nextFrameAt = 0.0
     private var opening = false
     private var restartQueued = false
     private var wantOpen = false
@@ -76,17 +80,45 @@ class CameraController(
     fun hasPermission(): Boolean =
         ctx.checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
 
+    /**
+     * Frame rates the JPEG path can actually reach at each supported size. The
+     * AE ranges say what the sensor can do, which is not the same thing: the
+     * encoder's stall time can cap the stream well below it, and it does so
+     * almost independently of the picture size.
+     */
+    private fun jpegRateTable(c: CameraCharacteristics): LinkedHashMap<String, Int> {
+        val out = LinkedHashMap<String, Int>()
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP) ?: return out
+        map.getOutputSizes(ImageFormat.JPEG)?.forEach { s ->
+            val cost = try {
+                maxOf(
+                    map.getOutputMinFrameDuration(ImageFormat.JPEG, s),
+                    map.getOutputStallDuration(ImageFormat.JPEG, s),
+                )
+            } catch (e: Exception) {
+                0L
+            }
+            out["${s.width}x${s.height}"] = if (cost > 0) (1_000_000_000.0 / cost).toInt() else 0
+        }
+        return out
+    }
+
     fun capabilities(): Caps = try {
         val c = mgr.getCameraCharacteristics(findCameraId(Prefs.facing))
-        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        val sizes = map?.getOutputSizes(ImageFormat.JPEG)
-            ?.map { "${it.width}x${it.height}" } ?: emptyList()
+        val rates = jpegRateTable(c)
+        // A size the encoder cannot drive at all is not offered for streaming.
+        val sizes = rates.filterValues { it == 0 || it >= 5 }.keys.toList()
         val maxZoom = c.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM) ?: 1f
         val torchOk = c.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
         val rawRanges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES) ?: emptyArray()
         val milli = rawRanges.any { it.upper > 1000 }
-        val fpsOpts = rawRanges.map { if (milli) it.upper / 1000 else it.upper }.distinct().sorted()
-        Caps(Prefs.facing, sizes, maxZoom, torchOk, fpsOpts.ifEmpty { listOf(15, 24, 30) })
+        val sensorFps = rawRanges.map { if (milli) it.upper / 1000 else it.upper }.distinct().sorted()
+        // Only offer rates the current size can reach.
+        val wanted = chooseSize(c, Prefs.resolution)
+        val maxFps = rates["${wanted.width}x${wanted.height}"] ?: 0
+        val fpsOpts = (if (maxFps > 0) sensorFps.filter { it <= maxFps } else sensorFps)
+            .ifEmpty { sensorFps.take(1) }
+        Caps(Prefs.facing, sizes, maxZoom, torchOk, fpsOpts, maxFps)
     } catch (e: Exception) {
         Caps(Prefs.facing, emptyList(), 1f, false, listOf(15, 24, 30))
     }
@@ -148,6 +180,11 @@ class CameraController(
             val ranges = chars!!.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             Log.i(TAG, "open camera id=$id facing=$facing size=${size.width}x${size.height} fps=$fps")
             Log.i(TAG, "ae fps ranges: ${ranges?.joinToString { "(${it.lower},${it.upper})" } ?: "none"}")
+            Log.i(
+                TAG,
+                "jpeg rate by size: " + jpegRateTable(chars!!)
+                    .entries.joinToString(" ") { "${it.key}=${it.value}" },
+            )
             loggedFirstFrame = false
             openDevice(id)
         } catch (e: Exception) {
@@ -194,8 +231,53 @@ class CameraController(
         }
     }
 
+    /**
+     * Periodically logs what the sensor is doing against what we actually send.
+     * Worth keeping: the advertised rates on some HALs bear no relation to the
+     * ones they deliver, so this is the only way to see the truth on a device.
+     */
+    private var rateAt = 0L
+    private var rateResults = 0
+    private var rateJpegs = 0
+    private var stageAcq = 0L
+    private var stageCopy = 0L
+    private var stageTrim = 0L
+    private var stageSend = 0L
+    private var stageN = 0
+    private val rateProbe = object : CameraCaptureSession.CaptureCallback() {
+        override fun onCaptureCompleted(
+            s: CameraCaptureSession,
+            request: CaptureRequest,
+            result: TotalCaptureResult,
+        ) {
+            rateResults++
+            val now = System.currentTimeMillis()
+            if (rateAt == 0L) { rateAt = now; return }
+            if (now - rateAt < 10000) return
+            val span = (now - rateAt) / 1000f
+            val n = stageN.coerceAtLeast(1)
+            fun ms(key: CaptureResult.Key<Long>) =
+                result.get(key)?.let { "%.1f".format(it / 1_000_000f) } ?: "?"
+            val line = "rate: sensor results=%.1f/s sent=%.1f/s of %d asked, frameDuration=%sms " +
+                "exposure=%sms range=%s, ms/frame: acquire=%.1f copy=%.1f trim=%.1f send=%.1f"
+            Log.i(
+                TAG,
+                line.format(
+                    rateResults / span, rateJpegs / span, fps,
+                    ms(CaptureResult.SENSOR_FRAME_DURATION),
+                    ms(CaptureResult.SENSOR_EXPOSURE_TIME),
+                    result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE),
+                    stageAcq / 1e6 / n, stageCopy / 1e6 / n,
+                    stageTrim / 1e6 / n, stageSend / 1e6 / n,
+                ),
+            )
+            rateAt = now; rateResults = 0; rateJpegs = 0
+            stageAcq = 0; stageCopy = 0; stageTrim = 0; stageSend = 0; stageN = 0
+        }
+    }
+
     private fun createSession(d: CameraDevice) {
-        val r = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 2)
+        val r = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 4)
         r.setOnImageAvailableListener({ rd -> onImage(rd) }, handler)
         reader = r
 
@@ -208,7 +290,7 @@ class CameraController(
                     session = s
                     Log.i(TAG, "capture session configured (surfaces=1)")
                     try {
-                        s.setRepeatingRequest(buildRequest(d, s), null, handler)
+                        s.setRepeatingRequest(buildRequest(d, s), rateProbe, handler)
                         Log.i(TAG, "repeating request set")
                     } catch (e: Exception) {
                         onError("setRepeatingRequest failed: ${e.message}")
@@ -264,21 +346,35 @@ class CameraController(
     }
 
     private fun onImage(rd: ImageReader) {
-        val img = try { rd.acquireLatestImage() } catch (e: Exception) { null } ?: return
+        val t0 = System.nanoTime()
+        val img = try { rd.acquireNextImage() } catch (e: Exception) { null } ?: return
         try {
             val buf = img.planes[0].buffer
+            // Rate limit to the requested frame rate. The budget is kept as a
+            // fraction so that dropping from a faster pipeline gives the exact
+            // average rate rather than a multiple of the arriving interval.
             val now = System.currentTimeMillis()
-            val minInterval = (1000.0 / fps.coerceAtLeast(1)).toLong()
-            if (now - lastFrameAt < minInterval) return
-            lastFrameAt = now
+            val interval = 1000.0 / fps.coerceAtLeast(1)
+            if (nextFrameAt == 0.0) nextFrameAt = now.toDouble()
+            if (now < nextFrameAt) return
+            nextFrameAt += interval
+            if (nextFrameAt < now) nextFrameAt = now + interval   // no burst after a stall
             val bytes = ByteArray(buf.remaining())
             buf.get(bytes)
+            val t1 = System.nanoTime()
             val size = trimSegmentPadding(bytes, bytes.size)
+            val t2 = System.nanoTime()
+            rateJpegs++
+            stageAcq += t1 - t0
+            stageCopy += t1 - t0
+            stageTrim += t2 - t1
+            stageN++
             if (!loggedFirstFrame) {
                 loggedFirstFrame = true
                 Log.i(TAG, "first frame: ${bytes.size} bytes, ${size} after trimming")
             }
             onFrame(if (size == bytes.size) bytes else bytes.copyOf(size))
+            stageSend += System.nanoTime() - t2
         } catch (e: Exception) {
             onError("frame read failed: ${e.message}")
         } finally {
@@ -390,6 +486,12 @@ class CameraController(
         val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             ?: return Range(want, want)
         val target = if (fpsScaleMilli(c)) want * 1000 else want
+        // Let the pipeline run as fast as it will and throttle in software below.
+        // Asking for a fixed range looks tidier, but the HAL then under-delivers
+        // it: with (15,15) it managed only 12.5 results a second while the sensor
+        // reported a 66.7 ms frame, whereas a wide range keeps it at 20+ and the
+        // requested rate can actually be met.
+        ranges.maxByOrNull { it.upper }?.let { return it }
         ranges.firstOrNull { it.lower <= target && target <= it.upper }?.let { return it }
         return ranges.minByOrNull { abs(it.upper - target) } ?: Range(target, target)
     }
