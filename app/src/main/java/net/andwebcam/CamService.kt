@@ -130,7 +130,7 @@ class CamService : Service(), HttpServer.Host {
             updateNotification()
             return
         }
-        acquireLocks()
+        updateLocks(false)          // start asleep: only the multicast lock
         State.serviceName = Prefs.serviceName
         State.port = Prefs.port
         State.ip = localIp()
@@ -194,6 +194,7 @@ class CamService : Service(), HttpServer.Host {
         mainHandler.post {
             if (!started) return@post
             mainHandler.removeCallbacks(idleStop)
+            updateLocks(count > 0)
             if (count > 0) {
                 if (streamingEnabled && !camera.active) {
                     Log.i(TAG, "viewer connected; opening camera")
@@ -338,28 +339,43 @@ class CamService : Service(), HttpServer.Host {
 
     // ---- locks / notification -----------------------------------------
 
-    private fun acquireLocks() {
-        if (wakeLock == null) {
-            val pm = getSystemService(PowerManager::class.java)
-            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "andwebcam:stream").apply {
-                setReferenceCounted(false)
-                acquire()
-            }
-        }
+    /**
+     * A full-rate stream needs the radio at high performance and the CPU awake,
+     * but only while somebody is actually watching. With no viewers both are
+     * released so the phone can sleep: an incoming connection still wakes it,
+     * and the multicast lock stays held so mDNS keeps answering and the page
+     * stays reachable.
+     */
+    private fun updateLocks(watching: Boolean) {
+        val wm = applicationContext.getSystemService(WifiManager::class.java)
         if (multicastLock == null) {
-            val wm = applicationContext.getSystemService(WifiManager::class.java)
             multicastLock = wm.createMulticastLock("andwebcam").apply {
                 setReferenceCounted(true)
                 acquire()
             }
-            // With the screen off the Wi-Fi stack drops into power save, which
-            // makes a full-rate MJPEG stream stall and reset. Hold a high
-            // performance Wi-Fi lock for as long as the service runs.
-            @Suppress("DEPRECATION")
-            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "andwebcam:stream").apply {
-                setReferenceCounted(false)
-                acquire()
+        }
+        if (watching) {
+            if (wakeLock == null) {
+                val pm = getSystemService(PowerManager::class.java)
+                wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "andwebcam:stream").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
             }
+            if (wifiLock == null) {
+                // With the screen off the Wi-Fi stack drops into power save,
+                // which makes a full-rate MJPEG stream stall and reset.
+                @Suppress("DEPRECATION")
+                wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "andwebcam:stream").apply {
+                    setReferenceCounted(false)
+                    acquire()
+                }
+            }
+        } else {
+            try { wakeLock?.release() } catch (_: Exception) {}
+            wakeLock = null
+            try { wifiLock?.release() } catch (_: Exception) {}
+            wifiLock = null
         }
     }
 

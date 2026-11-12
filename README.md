@@ -158,8 +158,11 @@ ffmpeg -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
   trusted LAN, not to authenticate the device cryptographically.
 * Orientation is applied as the JPEG's EXIF orientation, which browsers and
   ffmpeg honour without any transcoding cost on the phone.
-* The service holds a high-performance Wi-Fi lock and a partial wake lock, so
-  the stream keeps running at full rate with the screen off.
+* While somebody is watching, the service holds a high-performance Wi-Fi lock
+  and a partial wake lock, so the stream keeps running at full rate with the
+  screen off. With no viewers both are released and the phone is allowed to
+  sleep; a multicast lock stays held so it remains discoverable, and a new
+  connection wakes it.
 * A viewer connection can be reset by the network; the hub drops the client
   after three failed writes, the camera closes a few seconds later, and the web
   page or ffmpeg reconnect wakes it up again.
