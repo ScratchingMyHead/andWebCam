@@ -191,12 +191,16 @@ function post(path, obj) {
     body: JSON.stringify(obj)
   }).then(function(r) { return r.json().catch(function(){ return {}; }); });
 }
+// Start/Stop streaming takes a moment to take effect too, so it gets the same
+// acknowledgement as a camera setting even though it does not touch the camera
+// directly.
+function showsBusy(key) { return !!CAMERA_KEYS[key] || key === 'streaming'; }
 function setSetting(key, value) {
   var o = {}; o[key] = value;
-  if (CAMERA_KEYS[key]) { showBusy(); hideBusySoon(6000); }
+  if (showsBusy(key)) { showBusy(); hideBusySoon(6000); }
   post('/api/settings', o).then(function(r) {
     if (r.ok === false) { alert('Not authorized'); hideBusy(); return; }
-    if (CAMERA_KEYS[key]) { hideBusySoon(1200); }
+    if (showsBusy(key)) { hideBusySoon(1200); }
     setTimeout(refresh, 250);
   }).catch(function() { hideBusy(); });
 }
