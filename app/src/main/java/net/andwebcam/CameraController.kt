@@ -252,6 +252,12 @@ class CameraController(
             } else {
                 b.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_OFF)
             }
+            // Ask for no embedded thumbnail: some HALs put a full-size one in
+            // every frame, which is pure overhead for a stream.
+            val thumbs = c.get(CameraCharacteristics.JPEG_AVAILABLE_THUMBNAIL_SIZES) ?: emptyArray()
+            if (thumbs.any { it.width == 0 && it.height == 0 }) {
+                b.set(CaptureRequest.JPEG_THUMBNAIL_SIZE, Size(0, 0))
+            }
             cropRegion(c, zoom)?.let { b.set(CaptureRequest.SCALER_CROP_REGION, it) }
         }
         return b.build()
@@ -267,16 +273,67 @@ class CameraController(
             lastFrameAt = now
             val bytes = ByteArray(buf.remaining())
             buf.get(bytes)
+            val size = trimSegmentPadding(bytes, bytes.size)
             if (!loggedFirstFrame) {
                 loggedFirstFrame = true
-                Log.i(TAG, "first frame: ${bytes.size} bytes")
+                Log.i(TAG, "first frame: ${bytes.size} bytes, ${size} after trimming")
             }
-            onFrame(bytes)
+            onFrame(if (size == bytes.size) bytes else bytes.copyOf(size))
         } catch (e: Exception) {
             onError("frame read failed: ${e.message}")
         } finally {
             img.close()
         }
+    }
+
+    /**
+     * Some vendor HALs pad their APPn segments: they are declared at a fixed
+     * length, or filled with zeros, which can be half of every frame. Such a
+     * segment is dropped, a partly padded one has its trailing zeros cut and its
+     * length rewritten, and the rest of the image moves down. Only APPn and COM
+     * segments are considered, and the scan data after the SOS marker is copied
+     * verbatim, so the picture is untouched.
+     */
+    private fun trimSegmentPadding(src: ByteArray, len: Int): Int {
+        if (len < 4 || src[0] != 0xFF.toByte() || src[1] != 0xD8.toByte()) return len
+        var i = 2
+        var out = 2
+        while (i + 3 < len && src[i] == 0xFF.toByte()) {
+            val m = src[i + 1].toInt() and 0xFF
+            if (m == 0x01 || m in 0xD0..0xD9) {           // standalone marker, no length
+                src[out] = src[i]; src[out + 1] = src[i + 1]
+                out += 2; i += 2
+                continue
+            }
+            if (m == 0xDA) {                              // start of scan: copy the rest
+                System.arraycopy(src, i, src, out, len - i)
+                return out + (len - i)
+            }
+            val seg = ((src[i + 2].toInt() and 0xFF) shl 8) or (src[i + 3].toInt() and 0xFF)
+            if (seg < 2 || i + 2 + seg > len) break
+            val from = i + 4
+            var end = i + 2 + seg
+            if (m in 0xE0..0xEF || m == 0xFE) {
+                while (end > from && src[end - 1] == 0.toByte()) end--
+                var zeros = 0
+                for (p in from until end) if (src[p] == 0.toByte()) zeros++
+                if (zeros * 10 >= (end - from) * 9) end = from   // almost all padding
+            }
+            if (end > from) {
+                val newSeg = (end - from) + 2
+                src[out] = 0xFF.toByte(); src[out + 1] = src[i + 1]
+                src[out + 2] = (newSeg shr 8).toByte()
+                src[out + 3] = newSeg.toByte()
+                System.arraycopy(src, from, src, out + 4, end - from)
+                out += 2 + newSeg
+            }
+            i += 2 + seg
+        }
+        if (i < len) {                                    // unexpected: keep the remainder
+            System.arraycopy(src, i, src, out, len - i)
+            out += len - i
+        }
+        return out
     }
 
     private fun stopInternal() {
