@@ -197,6 +197,9 @@ function post(path, obj) {
 // acknowledgement as a camera setting even though it does not touch the camera
 // directly.
 function showsBusy(key) { return !!CAMERA_KEYS[key] || key === 'streaming'; }
+// The red line under the buttons is for the rare things worth reading; it
+// clears itself rather than sitting there looking important.
+var actionTimer = null;
 function setSetting(key, value) {
   var o = {}; o[key] = value;
   if (showsBusy(key)) { showBusy(); hideBusySoon(6000); }
@@ -404,6 +407,9 @@ function refresh() {
     if (!el('toggle').disabled) {
       el('toggle').textContent = s.streaming ? 'Stop streaming' : 'Start streaming';
     }
+    // Restarting needs device owner; without it there is nothing the button
+    // could do, so it is not offered.
+    el('reboot').classList.toggle('hidden', !s.canReboot);
     if (el('s_res').options.length !== (s.resolutions || []).length) {
       el('s_res').innerHTML = '';
       (s.resolutions || []).forEach(function(x) { var o = document.createElement('option'); o.value = x; o.textContent = x; el('s_res').appendChild(o); });
@@ -457,7 +463,6 @@ el('toggle').onclick = function() {
       alert('Not authorized');
       return;
     }
-    el('actionMsg').textContent = on ? 'Streaming started' : 'Streaming stopped';
     hideBusySoon(1200);
     setTimeout(refresh, 250);
   }).catch(function() {
@@ -466,11 +471,16 @@ el('toggle').onclick = function() {
     hideBusy();
   });
 };
+function actionMsg(text) {
+  el('actionMsg').textContent = text;
+  clearTimeout(actionTimer);
+  if (text) { actionTimer = setTimeout(function() { el('actionMsg').textContent = ''; }, 5000); }
+}
 el('reboot').onclick = function() {
   if (!confirm('Restart the phone now?')) { return; }
-  el('actionMsg').textContent = 'Rebooting...';
+  actionMsg('Rebooting...');
   post('/api/reboot', {}).then(function(r) {
-    if (r.ok === false) { el('actionMsg').textContent = r.error || 'Reboot failed'; }
+    if (r.ok === false) { actionMsg(r.error || 'Reboot failed'); }
   });
 };
 el('apply').onclick = function() {

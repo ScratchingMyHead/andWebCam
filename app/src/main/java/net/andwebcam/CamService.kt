@@ -265,6 +265,9 @@ class CamService : Service(), HttpServer.Host {
             "lastError" to State.lastError,
             "version" to BuildConfig.VERSION_NAME,
             "build" to BuildConfig.BUILD_ID,
+            // Restarting needs device owner; the page hides the button without it.
+            "canReboot" to (getSystemService(DevicePolicyManager::class.java)
+                ?.isDeviceOwnerApp(packageName) == true),
         )
     }
 
