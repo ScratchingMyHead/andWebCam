@@ -62,6 +62,7 @@ object WebUi {
  .badge.locked { background:#7a2f2f }
  .err { color:#f66; font-size:12px; min-height:1.2em; margin:6px 0 0 }
  .hint { color:#888; font-size:12px; margin:6px 0 0 }
+ .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
  .check { display:flex; align-items:center; gap:8px; font-size:13px; color:#bbb }
 </style>
 </head>
@@ -181,6 +182,7 @@ object WebUi {
       <p id="loginErr" class="err"></p>
     </div>
   </div>
+  <div class="foot" id="foot"></div>
 </main>
 <script>
 function el(id) { return document.getElementById(id); }
@@ -391,6 +393,7 @@ function refresh() {
     el('i_view').textContent = (s.clients || 0);
     applyVideo(s);
 
+    el('foot').textContent = 'andWebCam ' + (s.version || '?') + (s.build ? ' · ' + s.build : '');
     el('loginBtn').classList.toggle('hidden', !!s.admin);
     el('logoutBtn').classList.toggle('hidden', !s.admin);
     applyPane();

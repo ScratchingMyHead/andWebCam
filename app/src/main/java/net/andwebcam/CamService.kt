@@ -263,6 +263,8 @@ class CamService : Service(), HttpServer.Host {
             "cameraActive" to camera.active,
             "autoStartStreaming" to Prefs.autoStartStreaming,
             "lastError" to State.lastError,
+            "version" to BuildConfig.VERSION_NAME,
+            "build" to BuildConfig.BUILD_ID,
         )
     }
 
@@ -301,6 +303,19 @@ class CamService : Service(), HttpServer.Host {
     }
 
     override fun isStreaming(): Boolean = streamingEnabled
+
+    override fun diag(mode: String, seconds: Int, resolution: String): String {
+        val latch = java.util.concurrent.CountDownLatch(1)
+        var report = "no report"
+        camera.onDiagDone = { r ->
+            report = r
+            latch.countDown()
+        }
+        camera.runDiag(mode, seconds, resolution)
+        latch.await(seconds + 20L, java.util.concurrent.TimeUnit.SECONDS)
+        camera.onDiagDone = null
+        return report
+    }
 
     override fun reboot(): String? {
         val dpm = getSystemService(DevicePolicyManager::class.java)

@@ -17,6 +17,20 @@ if (localPropsFile.exists()) {
     }
 }
 
+// Every build is identifiable in the page footer, so a report of "the rate is
+// wrong" can be tied to an exact commit.
+fun git(vararg args: String): String = try {
+    val p = ProcessBuilder(listOf("git") + args).directory(rootDir).redirectErrorStream(true).start()
+    val out = p.inputStream.bufferedReader().readText().trim()
+    p.waitFor()
+    out.lineSequence().firstOrNull().orEmpty()
+} catch (e: Exception) {
+    ""
+}
+
+val buildId = git("rev-parse", "--short", "HEAD").ifEmpty { "unknown" } +
+    (if (git("status", "--porcelain").isNotEmpty()) "-dirty" else "")
+
 android {
     namespace = "net.andwebcam"
     compileSdk = 34
@@ -36,6 +50,7 @@ android {
         targetSdk = 34
         versionCode = 2
         versionName = "1.0"
+        buildConfigField("String", "BUILD_ID", "\"$buildId\"")
     }
 
     buildTypes {
@@ -48,6 +63,10 @@ android {
                 signingConfig = signingConfigs.getByName("release")
             }
         }
+    }
+
+    buildFeatures {
+        buildConfig = true
     }
 
     compileOptions {
