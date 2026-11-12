@@ -33,7 +33,7 @@ object WebUi {
  .video.loading .vload { display:flex }
  .video.loading img { display:none }
  .overlay { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; background:#000c; border-radius:8px; color:#bbb; font-size:15px }
- .busy { position:absolute; top:10px; left:10px; z-index:3; display:flex; align-items:center; gap:8px; padding:5px 12px 5px 9px; border:1px solid #33506b; border-radius:20px; background:#000a; color:#cde; font-size:12px }
+ .busy { position:absolute; top:10px; left:10px; z-index:5; display:flex; align-items:center; gap:8px; padding:5px 12px 5px 9px; border:1px solid #33506b; border-radius:20px; background:#000a; color:#cde; font-size:12px }
  .busy .spin { width:11px; height:11px; border-radius:50%; border:2px solid #33506b; border-top-color:#7cc4ff; animation:spin .7s linear infinite }
  .video.applying img { filter:brightness(.7) }
  @keyframes spin { to { transform:rotate(360deg) } }
@@ -399,7 +399,11 @@ function refresh() {
     applyPane();
     if (!s.admin) { return; }
 
-    el('toggle').textContent = s.streaming ? 'Stop streaming' : 'Start streaming';
+    // Not while a click is still waiting for its answer, or the poll would
+    // undo the "Starting.../Stopping..." label.
+    if (!el('toggle').disabled) {
+      el('toggle').textContent = s.streaming ? 'Stop streaming' : 'Start streaming';
+    }
     if (el('s_res').options.length !== (s.resolutions || []).length) {
       el('s_res').innerHTML = '';
       (s.resolutions || []).forEach(function(x) { var o = document.createElement('option'); o.value = x; o.textContent = x; el('s_res').appendChild(o); });
@@ -435,12 +439,31 @@ el('s_orient').onchange = function() { setSetting('orientation', this.value); };
 el('s_torch').onchange = function() { setSetting('torch', this.checked); };
 el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
+// The button says what it will do straight away (and refuses a second click)
+// rather than waiting for the answer, which takes a moment on a busy phone.
 el('toggle').onclick = function() {
   var on = !(window.S && window.S.streaming);
+  var btn = el('toggle');
+  var was = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = on ? 'Starting...' : 'Stopping...';
+  showBusy();
+  hideBusySoon(6000);
   post('/api/settings', { streaming: on }).then(function(r) {
-    if (r.ok === false) { alert('Not authorized'); return; }
+    btn.disabled = false;
+    if (r.ok === false) {
+      btn.textContent = was;
+      hideBusy();
+      alert('Not authorized');
+      return;
+    }
     el('actionMsg').textContent = on ? 'Streaming started' : 'Streaming stopped';
+    hideBusySoon(1200);
     setTimeout(refresh, 250);
+  }).catch(function() {
+    btn.disabled = false;
+    btn.textContent = was;
+    hideBusy();
   });
 };
 el('reboot').onclick = function() {
