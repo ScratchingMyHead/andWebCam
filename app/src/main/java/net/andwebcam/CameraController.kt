@@ -564,6 +564,12 @@ class CameraController(
         val ranges = c.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             ?: return Range(want, want)
         val target = if (fpsScaleMilli(c)) want * 1000 else want
+        // The frame rate setting is a target, not a guarantee: AE is left in
+        // charge of exposure, so in poor light it will trade frames for
+        // brightness (a 60 ms frame in a dim room against 33 ms in daylight).
+        // Pinning SENSOR_FRAME_DURATION would hold the rate but darken the
+        // picture, which is not what we want here.
+        //
         // Let the pipeline run as fast as it will and throttle in software below.
         // Asking for a fixed range looks tidier, but the HAL then under-delivers
         // it: with (15,15) it managed only 12.5 results a second while the sensor
