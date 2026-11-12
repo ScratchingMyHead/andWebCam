@@ -129,8 +129,8 @@ class MainActivity : Activity() {
         statusView.text = when {
             !State.running -> "Stopped"
             !State.streaming -> "Running  -  streaming stopped"
-            !State.cameraActive -> "Running  -  idle (no viewers)"
-            else -> "Running  -  ${State.framesPerSec} fps  -  ${State.clients} viewer(s)"
+            !State.cameraActive -> "Running  -  idle"
+            else -> "Running  -  ${State.framesPerSec} fps"
         }
         urlView.text = url + "\n" + (State.ip ?: "no network address")
 
