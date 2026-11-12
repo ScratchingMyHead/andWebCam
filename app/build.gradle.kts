@@ -3,23 +3,50 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Release signing comes from the (untracked, gitignored) local.properties:
+// release.storeFile / release.storePassword / release.keyAlias /
+// release.keyPassword. The keystore itself lives in keystore/, which is ignored
+// too. Keep both: without them later releases cannot update an installed copy.
+val localPropsFile = rootProject.file("local.properties")
+if (localPropsFile.exists()) {
+    localPropsFile.forEachLine { line ->
+        val t = line.trim()
+        if (t.isNotEmpty() && !t.startsWith("#") && "=" in t) {
+            project.extra.set(t.substringBefore("="), t.substringAfter("="))
+        }
+    }
+}
+
 android {
     namespace = "net.andwebcam"
     compileSdk = 34
+
+    signingConfigs {
+        create("release") {
+            storeFile = project.findProperty("release.storeFile")?.let { file(it as String) }
+            storePassword = project.findProperty("release.storePassword") as String?
+            keyAlias = project.findProperty("release.keyAlias") as String?
+            keyPassword = project.findProperty("release.keyPassword") as String?
+        }
+    }
 
     defaultConfig {
         applicationId = "net.andwebcam"
         minSdk = 28
         targetSdk = 34
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "1.0"
     }
 
     buildTypes {
         // Debug builds are what we sideload during development.
         release {
             isMinifyEnabled = false
-            signingConfig = signingConfigs.getByName("debug")
+            // Signed only when local.properties carries the release key;
+            // without it the release APK stays unsigned.
+            if (project.hasProperty("release.storeFile")) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

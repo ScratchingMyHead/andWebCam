@@ -8,3 +8,6 @@ build/
 local.properties
 *.apk
 *.keystore
+# Release signing key and its password, kept with the source rather than in
+# ~/.config so it does not get lost. Never commit these.
+keystore/
