@@ -34,6 +34,12 @@ class HttpServer(
 
         /** Returns null on success, or an error message. */
         fun reboot(): String?
+
+        /**
+         * Runs the camera with no processing and no streaming and reports the raw
+         * output rate. Diagnostic only; never surfaced in the page.
+         */
+        fun diag(mode: String, seconds: Int, resolution: String): String
     }
 
     private enum class Role { ADMIN, ANON, NONE }
@@ -198,6 +204,16 @@ class HttpServer(
                     } else {
                         respond(output, 200, "application/json", jsonBytes(mapOf("ok" to false, "error" to err)))
                     }
+                }
+            }
+
+            method == "POST" && path == "/api/diag" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    val mode = vals["mode"] ?: "jpeg"
+                    val seconds = (vals["seconds"]?.toIntOrNull() ?: 6).coerceIn(1, 60)
+                    val report = host.diag(mode, seconds, vals["resolution"] ?: "")
+                    respond(output, 200, "application/json", jsonBytes(mapOf("report" to report)))
                 }
             }
 

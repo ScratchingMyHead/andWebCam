@@ -176,7 +176,7 @@ class CameraController(
         try {
             val id = findCameraId(facing)
             chars = mgr.getCameraCharacteristics(id)
-            size = chooseSize(chars!!, Prefs.resolution)
+            size = chooseSize(chars!!, diag?.resolution?.takeIf { it.isNotBlank() } ?: Prefs.resolution)
             val ranges = chars!!.get(CameraCharacteristics.CONTROL_AE_AVAILABLE_TARGET_FPS_RANGES)
             Log.i(TAG, "open camera id=$id facing=$facing size=${size.width}x${size.height} fps=$fps")
             Log.i(TAG, "ae fps ranges: ${ranges?.joinToString { "(${it.lower},${it.upper})" } ?: "none"}")
@@ -239,11 +239,17 @@ class CameraController(
     private var rateAt = 0L
     private var rateResults = 0
     private var rateJpegs = 0
-    private var stageAcq = 0L
-    private var stageCopy = 0L
-    private var stageTrim = 0L
-    private var stageSend = 0L
+    private val stageSum = LongArray(4)
+    private val stageMin = LongArray(4) { Long.MAX_VALUE }
+    private val stageMax = LongArray(4)
     private var stageN = 0
+
+    private fun stage(i: Int, from: Long) {
+        val d = System.nanoTime() - from
+        stageSum[i] += d
+        if (d < stageMin[i]) stageMin[i] = d
+        if (d > stageMax[i]) stageMax[i] = d
+    }
     private val rateProbe = object : CameraCaptureSession.CaptureCallback() {
         override fun onCaptureCompleted(
             s: CameraCaptureSession,
@@ -251,6 +257,13 @@ class CameraController(
             result: TotalCaptureResult,
         ) {
             rateResults++
+            if (diag != null) {
+                diagResults++
+                diagFrameMs = (result.get(CaptureResult.SENSOR_FRAME_DURATION) ?: 0L) / 1_000_000f
+                diagExposureMs = (result.get(CaptureResult.SENSOR_EXPOSURE_TIME) ?: 0L) / 1_000_000f
+                diagRange = result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE)?.toString() ?: "?"
+                return
+            }
             val now = System.currentTimeMillis()
             if (rateAt == 0L) { rateAt = now; return }
             if (now - rateAt < 10000) return
@@ -258,8 +271,18 @@ class CameraController(
             val n = stageN.coerceAtLeast(1)
             fun ms(key: CaptureResult.Key<Long>) =
                 result.get(key)?.let { "%.1f".format(it / 1_000_000f) } ?: "?"
+            val names = arrayOf("acquire", "copy", "trim", "send")
+            val parts = StringBuilder()
+            for (i in names.indices) {
+                if (stageSum[i] == 0L) continue
+                parts.append(
+                    "%s=%.1f/%.1f/%.1f ".format(
+                        names[i], stageMin[i] / 1e6, stageSum[i] / 1e6 / n, stageMax[i] / 1e6,
+                    ),
+                )
+            }
             val line = "rate: sensor results=%.1f/s sent=%.1f/s of %d asked, frameDuration=%sms " +
-                "exposure=%sms range=%s, ms/frame: acquire=%.1f copy=%.1f trim=%.1f send=%.1f"
+                "exposure=%sms range=%s, ms/frame min/avg/max: %s"
             Log.i(
                 TAG,
                 line.format(
@@ -267,17 +290,64 @@ class CameraController(
                     ms(CaptureResult.SENSOR_FRAME_DURATION),
                     ms(CaptureResult.SENSOR_EXPOSURE_TIME),
                     result.get(CaptureResult.CONTROL_AE_TARGET_FPS_RANGE),
-                    stageAcq / 1e6 / n, stageCopy / 1e6 / n,
-                    stageTrim / 1e6 / n, stageSend / 1e6 / n,
+                    parts.toString(),
                 ),
             )
             rateAt = now; rateResults = 0; rateJpegs = 0
-            stageAcq = 0; stageCopy = 0; stageTrim = 0; stageSend = 0; stageN = 0
+            stageSum.fill(0); stageMin.fill(Long.MAX_VALUE); stageMax.fill(0); stageN = 0
         }
     }
 
+    /**
+     * Diagnostic: measure what the camera can output with no processing and no
+     * streaming at all, optionally without the JPEG encoder in the path.
+     */
+    class Diag(val mode: String, val seconds: Int, val resolution: String)
+
+    @Volatile private var diag: Diag? = null
+    private var diagImages = 0
+    private var diagResults = 0
+    private var diagAt = 0L
+    private var diagFrameMs = 0f
+    private var diagExposureMs = 0f
+    private var diagRange = ""
+
+    /** Called on the camera thread when a run finishes, with a one-line report. */
+    @Volatile var onDiagDone: ((String) -> Unit)? = null
+
+    fun runDiag(mode: String, seconds: Int, resolution: String) = handler.post {
+        if (diag != null) return@post
+        val resume = wantOpen
+        diag = Diag(mode, seconds, resolution)
+        diagImages = 0
+        diagResults = 0
+        stopInternal()
+        wantOpen = true          // openDevice() closes it again if this is false
+        startInternal()
+        diagAt = System.currentTimeMillis()
+        handler.postDelayed({
+            val d = diag
+            if (d != null) {
+                val span = (System.currentTimeMillis() - diagAt) / 1000.0
+                val line = ("diag %s %dx%d %.1fs: capture results=%.1f/s, images=%.1f/s (%d total), " +
+                    "frameDuration=%.1fms exposure=%.1fms range=%s").format(
+                    d.mode, size.width, size.height, span,
+                    diagResults / span, diagImages / span, diagImages,
+                    diagFrameMs, diagExposureMs, diagRange,
+                )
+                Log.i(TAG, line)
+                diag = null
+                stopInternal()
+                wantOpen = resume
+                if (resume) requestStart()
+                onDiagDone?.invoke(line)
+            }
+        }, seconds * 1000L + 500)
+    }
+
     private fun createSession(d: CameraDevice) {
-        val r = ImageReader.newInstance(size.width, size.height, ImageFormat.JPEG, 4)
+        val fmt = if (diag?.mode?.startsWith("yuv") == true) ImageFormat.YUV_420_888 else ImageFormat.JPEG
+        val r = ImageReader.newInstance(size.width, size.height, fmt, 4)
         r.setOnImageAvailableListener({ rd -> onImage(rd) }, handler)
         reader = r
 
@@ -328,7 +398,16 @@ class CameraController(
         b.set(CaptureRequest.JPEG_QUALITY, quality.coerceIn(1, 100).toByte())
         b.set(CaptureRequest.JPEG_ORIENTATION, orientation)
         chars?.let { c ->
-            b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, fpsRange(c, fps))
+            val range = fpsRange(c, fps)
+            b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
+            // "jpeg+fixed": take exposure out of the picture, so the measurement
+            // is the pipeline's ceiling rather than what AE chose for the light.
+            if (diag?.mode?.endsWith("+fixed") == true) {
+                b.set(CaptureRequest.CONTROL_AE_MODE, CameraMetadata.CONTROL_AE_MODE_OFF)
+                b.set(CaptureRequest.SENSOR_EXPOSURE_TIME, 5_000_000L)
+                b.set(CaptureRequest.SENSOR_SENSITIVITY, 1600)
+                b.set(CaptureRequest.SENSOR_FRAME_DURATION, (1_000_000_000L / range.upper))
+            }
             if (c.get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true && torch) {
                 b.set(CaptureRequest.FLASH_MODE, CameraMetadata.FLASH_MODE_TORCH)
             } else {
@@ -349,8 +428,15 @@ class CameraController(
         val t0 = System.nanoTime()
         val img = try { rd.acquireNextImage() } catch (e: Exception) { null } ?: return
         try {
+            if (diag != null) {            // count only: no copy, trim or send
+                diagImages++
+                return
+            }
+            stage(0, t0)                   // acquire
+            val t1 = System.nanoTime()
             val buf = img.planes[0].buffer
-            // Rate limit to the requested frame rate. The budget is kept as a
+
+            // Rate limit to the requested frame rate. The budget stays a
             // fraction so that dropping from a faster pipeline gives the exact
             // average rate rather than a multiple of the arriving interval.
             val now = System.currentTimeMillis()
@@ -359,22 +445,22 @@ class CameraController(
             if (now < nextFrameAt) return
             nextFrameAt += interval
             if (nextFrameAt < now) nextFrameAt = now + interval   // no burst after a stall
+
             val bytes = ByteArray(buf.remaining())
             buf.get(bytes)
-            val t1 = System.nanoTime()
-            val size = trimSegmentPadding(bytes, bytes.size)
             val t2 = System.nanoTime()
+            stage(1, t1)                   // copy
+            val size = trimSegmentPadding(bytes, bytes.size)
+            val t3 = System.nanoTime()
+            stage(2, t2)                   // trim
             rateJpegs++
-            stageAcq += t1 - t0
-            stageCopy += t1 - t0
-            stageTrim += t2 - t1
             stageN++
             if (!loggedFirstFrame) {
                 loggedFirstFrame = true
                 Log.i(TAG, "first frame: ${bytes.size} bytes, ${size} after trimming")
             }
             onFrame(if (size == bytes.size) bytes else bytes.copyOf(size))
-            stageSend += System.nanoTime() - t2
+            stage(3, t3)                   // send
         } catch (e: Exception) {
             onError("frame read failed: ${e.message}")
         } finally {
@@ -382,14 +468,6 @@ class CameraController(
         }
     }
 
-    /**
-     * Some vendor HALs pad their APPn segments: they are declared at a fixed
-     * length, or filled with zeros, which can be half of every frame. Such a
-     * segment is dropped, a partly padded one has its trailing zeros cut and its
-     * length rewritten, and the rest of the image moves down. Only APPn and COM
-     * segments are considered, and the scan data after the SOS marker is copied
-     * verbatim, so the picture is untouched.
-     */
     private fun trimSegmentPadding(src: ByteArray, len: Int): Int {
         if (len < 4 || src[0] != 0xFF.toByte() || src[1] != 0xD8.toByte()) return len
         var i = 2
