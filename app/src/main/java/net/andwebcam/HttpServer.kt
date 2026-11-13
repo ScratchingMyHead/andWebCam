@@ -50,13 +50,18 @@ class HttpServer(
     private val rng = SecureRandom()
 
     /**
-     * Successful Basic credentials, hashed, with a short life. Verifying the
-     * password costs ~4.4 s of CPU (PBKDF2, 120k iterations), so a client that
-     * polls with -u, or ffmpeg reconnecting, used to pin a core. A repeated
-     * request now costs the same as a cookie request.
+     * Successful Basic credentials, hashed, kept for the life of the service.
+     * Verifying the password costs ~4.4 s of CPU (120k PBKDF2 iterations)
+     * against 0.03 s for a cookie request, so a client polling with -u, or
+     * ffmpeg reconnecting, used to pin a core.
+     *
+     * Keeping them indefinitely widens nothing: the map is keyed by the
+     * credential itself, which Basic auth already treats as valid until the
+     * password changes - and changing the password clears this. The timestamp
+     * is only there to evict the oldest entry if the map ever fills.
      */
     private val basicOk = ConcurrentHashMap<String, Long>()
-    private val basicTtlMs = 5 * 60_000L
+    private val basicMax = 32
 
     @Volatile private var socket: SSLServerSocket? = null
     @Volatile private var running = false
@@ -285,24 +290,19 @@ class HttpServer(
         val auth = headers["authorization"]
         if (auth != null && auth.startsWith("Basic ", ignoreCase = true)) {
             val key = basicKey(auth)
-            val now = System.currentTimeMillis()
-            val exp = basicOk[key]
-            if (exp != null && exp > now) {
-                // Sliding window: a client that keeps using the credentials
-                // never pays for PBKDF2 again, an idle one lapses.
-                basicOk[key] = now + basicTtlMs
-                return Role.ADMIN
-            }
+            if (basicOk.containsKey(key)) return Role.ADMIN
             try {
                 val dec = String(Base64.decode(auth.substring(6).trim(), Base64.DEFAULT))
                 val i = dec.indexOf(':')
                 if (i >= 0 && Prefs.verifyAdmin(dec.substring(0, i), dec.substring(i + 1))) {
-                    if (basicOk.size < 32) basicOk[key] = System.currentTimeMillis() + basicTtlMs
+                    if (basicOk.size >= basicMax) {
+                        basicOk.minByOrNull { it.value }?.let { basicOk.remove(it.key) }
+                    }
+                    basicOk[key] = System.currentTimeMillis()
                     return Role.ADMIN
                 }
             } catch (_: Exception) {
             }
-            basicOk.remove(key)
         }
         return if (Prefs.anonView) Role.ANON else Role.NONE
     }
