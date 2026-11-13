@@ -49,6 +49,15 @@ class HttpServer(
     private val sessions = ConcurrentHashMap<String, Long>()
     private val rng = SecureRandom()
 
+    /**
+     * Successful Basic credentials, hashed, with a short life. Verifying the
+     * password costs ~4.4 s of CPU (PBKDF2, 120k iterations), so a client that
+     * polls with -u, or ffmpeg reconnecting, used to pin a core. A repeated
+     * request now costs the same as a cookie request.
+     */
+    private val basicOk = ConcurrentHashMap<String, Long>()
+    private val basicTtlMs = 5 * 60_000L
+
     @Volatile private var socket: SSLServerSocket? = null
     @Volatile private var running = false
     private var acceptThread: Thread? = null
@@ -90,11 +99,19 @@ class HttpServer(
                 if (running) continue else break
             }
             pool.execute {
+                val from = try { c.inetAddress?.hostAddress ?: "?" } catch (_: Exception) { "?" }
+                val started = System.currentTimeMillis()
                 try {
+                    // A client that connects and then stalls must not hold a
+                    // thread for ever. Cleared again before streaming, where
+                    // writes may legitimately block.
+                    try { c.soTimeout = 15000 } catch (_: Exception) {}
                     handle(c)
                 } catch (e: Exception) {
-                    Log.w("andWebCam", "request failed: ${e.message}")
+                    Log.w("andWebCam", "request from $from failed: ${e.message}")
                 } finally {
+                    val ms = System.currentTimeMillis() - started
+                    if (ms > 5000) Log.w("andWebCam", "slow request from $from: ${ms}ms")
                     try { c.close() } catch (_: Exception) {}
                 }
             }
@@ -126,6 +143,10 @@ class HttpServer(
             body = ByteArray(cl)
             readFully(input, body)
         }
+
+        // The request has been read; from here on a blocked write is normal
+        // (a viewer that reads slowly) so the socket timeout goes away.
+        try { sock.soTimeout = 0 } catch (_: Exception) {}
 
         val role = authRole(headers)
 
@@ -191,6 +212,8 @@ class HttpServer(
                         respond(output, 200, "application/json", jsonBytes(mapOf("ok" to false, "error" to "too short")))
                     } else {
                         host.changePassword(np)
+                        basicOk.clear()      // old credentials must stop working
+                        sessions.clear()
                         respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                     }
                 }
@@ -261,14 +284,32 @@ class HttpServer(
         }
         val auth = headers["authorization"]
         if (auth != null && auth.startsWith("Basic ", ignoreCase = true)) {
+            val key = basicKey(auth)
+            val now = System.currentTimeMillis()
+            val exp = basicOk[key]
+            if (exp != null && exp > now) {
+                // Sliding window: a client that keeps using the credentials
+                // never pays for PBKDF2 again, an idle one lapses.
+                basicOk[key] = now + basicTtlMs
+                return Role.ADMIN
+            }
             try {
                 val dec = String(Base64.decode(auth.substring(6).trim(), Base64.DEFAULT))
                 val i = dec.indexOf(':')
-                if (i >= 0 && Prefs.verifyAdmin(dec.substring(0, i), dec.substring(i + 1))) return Role.ADMIN
+                if (i >= 0 && Prefs.verifyAdmin(dec.substring(0, i), dec.substring(i + 1))) {
+                    if (basicOk.size < 32) basicOk[key] = System.currentTimeMillis() + basicTtlMs
+                    return Role.ADMIN
+                }
             } catch (_: Exception) {
             }
+            basicOk.remove(key)
         }
         return if (Prefs.anonView) Role.ANON else Role.NONE
+    }
+
+    private fun basicKey(auth: String): String {
+        val d = java.security.MessageDigest.getInstance("SHA-256").digest(auth.toByteArray())
+        return Base64.encodeToString(d, Base64.NO_WRAP)
     }
 
     private fun parseSid(cookie: String?): String? {
@@ -295,13 +336,20 @@ class HttpServer(
 
     // ---- io helpers ---------------------------------------------------
 
-    private fun readLine(input: InputStream): String? {
+    /**
+     * Bounded on purpose: an endless stream with no line ending in it used to
+     * grow the builder without limit and spin a pool thread at 100% CPU.
+     */
+    private fun readLine(input: InputStream, max: Int = 8192): String? {
         val sb = StringBuilder()
         while (true) {
             val b = input.read()
             if (b == -1) return if (sb.isEmpty()) null else sb.toString()
             if (b == '\n'.code) return sb.toString()
-            if (b != '\r'.code) sb.append(b.toChar())
+            if (b != '\r'.code) {
+                if (sb.length >= max) throw java.io.IOException("line too long")
+                sb.append(b.toChar())
+            }
         }
     }
 
@@ -309,7 +357,7 @@ class HttpServer(
         var off = 0
         while (off < out.size) {
             val n = input.read(out, off, out.size - off)
-            if (n < 0) break
+            if (n <= 0) break          // 0 would spin; -1 is the end
             off += n
         }
     }

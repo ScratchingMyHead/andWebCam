@@ -309,6 +309,14 @@ class CamService : Service(), HttpServer.Host {
     override fun isStreaming(): Boolean = streamingEnabled
 
     override fun diag(mode: String, seconds: Int, resolution: String): String {
+        if (mode == "threads") {
+            val sb = StringBuilder()
+            Thread.getAllStackTraces().forEach { (t, stack) ->
+                sb.append("${t.name} state=${t.state}\n")
+                stack.take(14).forEach { sb.append("    at $it\n") }
+            }
+            return sb.toString()
+        }
         val latch = java.util.concurrent.CountDownLatch(1)
         var report = "no report"
         camera.onDiagDone = { r ->
