@@ -131,11 +131,18 @@ or `port` rebuilds the capture session or restarts the server.
 
 ## Consuming it on the desktop
 
-Trust the certificate once:
+Fetch the certificate from the phone once:
 
 ```
 curl -sk https://andwebcam.local:8443/cert -o andwebcam.pem
 ```
+
+It belongs to that install alone (see the notes below), so do not reuse one
+fetched elsewhere; `openssl x509 -in andwebcam.pem -noout -fingerprint -sha256`
+should match the fingerprint on the app's screen. A browser has no authority to
+check a self-signed certificate against, so it will warn and offer an exception
+(Firefox: **Advanced** → **Accept the Risk and Continue**), which it then
+remembers.
 
 Then, for example, into a virtual webcam:
 
@@ -156,10 +163,14 @@ ffmpeg -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
 
 ## Notes / quirks
 
-* The bundled TLS certificate is self-signed with SAN `andwebcam.local`
-  (`scripts/make-cert.sh`). Because it ships in the APK its private key is not
-  secret; it exists to make the stream encrypted and the name verifiable on a
-  trusted LAN, not to authenticate the device cryptographically.
+* The TLS key and certificate are generated on the phone the first time the
+  service starts and kept in the app's private files, so every install has its
+  own identity and no key material is in the APK or the repository. The
+  certificate is self-signed and `CA:FALSE`: browsers have no authority to
+  check it against, so they warn, and the only proof that you are talking to
+  this phone is the SHA-256 fingerprint on the app's screen matching the one
+  the browser shows. It is regenerated if the hostname changes or after ten
+  years.
 * Orientation is applied as the JPEG's EXIF orientation, which browsers and
   ffmpeg honour without any transcoding cost on the phone.
 * While somebody is watching, the service holds a high-performance Wi-Fi lock
@@ -176,9 +187,13 @@ ffmpeg -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
 Building from source:
 
 ```
-scripts/make-cert.sh          # regenerate the bundled TLS cert (only if needed)
 ./gradlew assembleDebug
 ```
+
+The TLS identity is not built in: it is created on the device at first run
+(`Tls.kt`), so there is nothing to regenerate before a build. Clearing the
+app's data, or reinstalling it, gives the phone a new key and certificate, and
+any browser exception or saved certificate for it has to be made again.
 
 Installing straight to a phone on USB (equivalent to tapping the APK, but also
 grants the camera permission up front, which is handy for an unattended phone):
