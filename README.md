@@ -82,10 +82,6 @@ Open `https://andwebcam.local:8443/` (or the IP shown on the phone).
 
 * **Start / Stop streaming** buttons turn the stream on and off. While stopped,
   `/video` answers 503 and viewers are disconnected.
-* The **camera icon** under those buttons saves a snapshot: one JPEG at the
-  current resolution and settings, not a scaling of the page. It works while
-  stopped too, and the camera is closed again afterwards unless someone is
-  watching.
 * **Start streaming when the service starts** (default on) decides whether
   streaming is enabled after a boot or service restart. It is a stored
   preference; toggling it does not stop a stream that is already running.

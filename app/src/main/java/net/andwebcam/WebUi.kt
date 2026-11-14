@@ -35,6 +35,8 @@ object WebUi {
  .overlay { position:absolute; inset:0; z-index:4; display:flex; flex-direction:column; gap:6px; align-items:center; justify-content:center; background:#000c; border-radius:8px; color:#bbb; font-size:15px }
  .busy { position:absolute; top:10px; left:10px; z-index:5; display:flex; align-items:center; gap:8px; padding:5px 12px 5px 9px; border:1px solid #33506b; border-radius:20px; background:#000a; color:#cde; font-size:12px }
  .busy .spin { width:11px; height:11px; border-radius:50%; border:2px solid #33506b; border-top-color:#7cc4ff; animation:spin .7s linear infinite }
+ .busy.err { border-color:#7a2f2f; color:#f99 }
+ .busy.err .spin { display:none }
  .video.applying img { filter:brightness(.7) }
  @keyframes spin { to { transform:rotate(360deg) } }
  .panel { flex:0 1 320px; background:#1b1b1b; border-radius:8px; padding:14px }
@@ -54,7 +56,7 @@ object WebUi {
  .iconbtn:hover:not(:disabled) { background:#3d3d3d; color:#fff }
  .iconbtn:disabled { opacity:.5; cursor:default }
  .iconbtn svg { width:19px; height:19px; display:block; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
- .snapRow { margin-top:8px }
+ .snapTop { margin-right:6px }
  .seg { display:flex }
  .seg button { background:#262626; color:#bbb; padding:7px 10px; font-size:12px; border-radius:0; border-left:1px solid #111 }
  .seg button:hover { background:#333; color:#eee }
@@ -76,6 +78,7 @@ object WebUi {
   <h1>andWebCam</h1>
   <span id="who" class="badge locked">...</span>
   <span class="grow"></span>
+  <button id="snap" class="iconbtn snapTop hidden" title="Save a snapshot" aria-label="Save a snapshot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
   <span class="seg" id="scales">
     <button data-scale="fit" title="Fit the whole frame">Fit</button>
     <button data-scale="w" title="Fit width (drag to pan)">W</button>
@@ -108,9 +111,6 @@ object WebUi {
         <button id="toggle">Stop streaming</button>
         <button id="reboot" class="danger">Restart phone</button>
         <button id="paneClose" class="paneClose" title="Hide the settings pane" aria-label="Hide the settings pane">&raquo;</button>
-      </div>
-      <div class="actions snapRow">
-        <button id="snap" class="iconbtn" title="Save a snapshot" aria-label="Save a snapshot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
       </div>
       <p class="err" id="actionMsg"></p>
 
@@ -385,7 +385,18 @@ function showBusy(text) {
 function hideBusy() {
   clearTimeout(busyTimer);
   el('busy').classList.add('hidden');
+  el('busy').classList.remove('err');
   el('video').classList.remove('applying');
+}
+// A failure is shown in the same chip, because the snapshot button is in the
+// header and view-only users have no settings panel to write into.
+function showBusyError(text) {
+  clearTimeout(busyTimer);
+  el('busy').classList.remove('hidden');
+  el('busy').classList.add('err');
+  el('busyText').textContent = text;
+  el('video').classList.remove('applying');
+  busyTimer = setTimeout(hideBusy, 5000);
 }
 function hideBusySoon(ms) {
   clearTimeout(busyTimer);
@@ -414,6 +425,8 @@ function refresh() {
     el('foot').textContent = 'andWebCam ' + (s.version || '?') + (s.build ? ' · ' + s.build : '');
     el('loginBtn').classList.toggle('hidden', !!s.admin);
     el('logoutBtn').classList.toggle('hidden', !s.admin);
+    // View-only users may save a frame too: the server already allows them.
+    el('snap').classList.toggle('hidden', !s.admin && !s.anonView);
     applyPane();
     if (!s.admin) { return; }
 
@@ -536,8 +549,7 @@ function grabSnapshot(name, handle) {
   }).then(function() {
     hideBusy();
   }).catch(function(e) {
-    hideBusy();
-    actionMsg('Snapshot failed: ' + (e && e.message ? e.message : 'unknown error'));
+    showBusyError('Snapshot failed: ' + (e && e.message ? e.message : 'unknown error'));
   }).then(function() {
     btn.disabled = false;
   });
