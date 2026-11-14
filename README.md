@@ -103,12 +103,15 @@ Open `https://andwebcam.local:8443/` (or the IP shown on the phone).
 * Anonymous **view-only** access (stream + status, no controls) is available as
   an option and is **off by default**.
 * Both a session cookie (the web UI) and HTTP Basic (ffmpeg/curl) are accepted.
+* **Log out** ends the session in that browser. It also refuses the browser's
+  saved HTTP Basic password until you log in through the form again, so a
+  browser that had remembered the password cannot sign itself back in.
 
 ### API
 
 | Method | Path             | Auth            | Purpose                          |
 |--------|------------------|-----------------|----------------------------------|
-| GET    | `/`              | view            | control page                     |
+| GET    | `/`              | none            | control page (a shell until you log in) |
 | GET    | `/video`         | view            | MJPEG stream                     |
 | GET    | `/snapshot`      | view            | one JPEG, current settings       |
 | GET    | `/api/status`    | view            | JSON status + capabilities       |

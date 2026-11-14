@@ -396,13 +396,20 @@ function refresh() {
     window.S = s;
     el('who').textContent = s.admin ? 'admin' : (s.anonView ? 'view-only' : 'locked');
     el('who').className = 'badge ' + (s.admin ? '' : (s.anonView ? 'anon' : 'locked'));
-    el('i_state').textContent = !s.streaming ? 'Stopped' : (s.cameraActive ? 'Streaming' : 'Idle (no viewers)');
+    el('who').title = s.auth ? 'Signed in with ' + s.auth : '';
+    el('i_state').textContent = s.locked ? 'Locked'
+      : (!s.streaming ? 'Stopped' : (s.cameraActive ? 'Streaming' : 'Idle (no viewers)'));
     el('i_cam').textContent = s.facing || '-';
     el('i_res').textContent = (s.width || '?') + 'x' + (s.height || '?');
     el('i_fps').textContent = (s.fpsActive || 0) + ' / ' + (s.fps || '?') + ' fps';
     el('i_torch').textContent = s.torch ? (s.torchAvailable ? 'on' : 'n/a') : 'off';
     el('i_view').textContent = (s.clients || 0);
     applyVideo(s);
+    if (s.locked) {
+      // Signed out: there is no stream to announce, only the way back in.
+      el('stopped').classList.add('hidden');
+      el('loginForm').classList.remove('hidden');
+    }
 
     el('foot').textContent = 'andWebCam ' + (s.version || '?') + (s.build ? ' · ' + s.build : '');
     el('loginBtn').classList.toggle('hidden', !!s.admin);
@@ -594,8 +601,19 @@ el('paneClose').onclick = el('paneToggle').onclick;
 el('loginBtn').onclick = function() { el('loginForm').classList.toggle('hidden'); };
 el('logoutBtn').onclick = function() { post('/api/logout', {}).then(function() { location.reload(); }); };
 el('doLogin').onclick = function() {
+  var b = el('doLogin');
+  b.disabled = true;
+  b.textContent = 'Logging in...';
+  el('loginErr').textContent = '';
   post('/api/login', { user: el('l_user').value, pass: el('l_pass').value }).then(function(r) {
-    if (r.ok) { location.reload(); } else { el('loginErr').textContent = 'Wrong username or password'; }
+    if (r.ok) { location.reload(); return; }
+    b.disabled = false;
+    b.textContent = 'Log in';
+    el('loginErr').textContent = 'Wrong username or password';
+  }).catch(function() {
+    b.disabled = false;
+    b.textContent = 'Log in';
+    el('loginErr').textContent = 'Could not reach the phone';
   });
 };
 scaleMode = scalePref() || 'fit';

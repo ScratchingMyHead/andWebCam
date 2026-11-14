@@ -19,7 +19,11 @@ import javax.net.ssl.SSLServerSocket
  * Auth model:
  *  - cookie session (POST /api/login) or HTTP Basic, both granting ADMIN
  *  - when Prefs.anonView is on, unauthenticated requests get ANON (view only)
- *  - when it is off, everything except /cert and /api/login requires auth
+ *  - the page itself is served without a session (it carries the login form),
+ *    but everything it displays comes from the API, which stays gated
+ *  - logging out also stops the browser's cached Basic password from being
+ *    accepted, via a cookie: otherwise the browser simply signs itself back
+ *    in on the next request
  */
 class HttpServer(
     private val ctx: Context,
@@ -46,6 +50,9 @@ class HttpServer(
     }
 
     private enum class Role { ADMIN, ANON, NONE }
+
+    /** How this request was authenticated, for the status page and the log. */
+    private class Who(val role: Role, val method: String)
 
     private val ssl = Tls.sslContext(ctx)
     private val pool = Executors.newCachedThreadPool()
@@ -156,7 +163,8 @@ class HttpServer(
         // (a viewer that reads slowly) so the socket timeout goes away.
         try { sock.soTimeout = 0 } catch (_: Exception) {}
 
-        val role = authRole(headers)
+        val who = authWho(headers)
+        val role = who.role
 
         when {
             method == "GET" && path == "/cert" -> {
@@ -177,7 +185,11 @@ class HttpServer(
                     respond(
                         output, 200, "application/json",
                         jsonBytes(mapOf("ok" to true)),
-                        listOf("Set-Cookie: sid=$token; Path=/; HttpOnly; SameSite=Strict")
+                        listOf(
+                            "Set-Cookie: sid=$token; Path=/; HttpOnly; SameSite=Strict",
+                            // A proper login re-enables Basic for this browser.
+                            "Set-Cookie: nobasic=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+                        )
                     )
                 } else {
                     respond(output, 401, "application/json", jsonBytes(mapOf("ok" to false, "error" to "bad credentials")))
@@ -189,15 +201,38 @@ class HttpServer(
                 respond(
                     output, 200, "application/json",
                     jsonBytes(mapOf("ok" to true)),
-                    listOf("Set-Cookie: sid=; Path=/; HttpOnly; Max-Age=0")
+                    listOf(
+                        "Set-Cookie: sid=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0",
+                        // Without this a browser that saved the HTTP Basic
+                        // password signs itself straight back in on the reload,
+                        // which makes the button look broken.
+                        "Set-Cookie: nobasic=1; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000",
+                    )
                 )
             }
 
             method == "GET" && path == "/api/status" -> {
-                if (role == Role.NONE) unauthorized(output) else {
+                if (role == Role.NONE) {
+                    // Signed out: enough for the page to offer the login form,
+                    // and nothing about the camera.
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(
+                            mapOf(
+                                "locked" to true,
+                                "admin" to false,
+                                "anonView" to false,
+                                "auth" to who.method,
+                                "version" to BuildConfig.VERSION_NAME,
+                                "build" to BuildConfig.BUILD_ID,
+                            )
+                        )
+                    )
+                } else {
                     val m = host.statusJson()
                     m["admin"] = role == Role.ADMIN
                     m["anonView"] = Prefs.anonView
+                    m["auth"] = who.method
                     m["host"] = "${Prefs.serviceName}.local"
                     m["url"] = State.url
                     respond(output, 200, "application/json", jsonBytes(m))
@@ -272,8 +307,9 @@ class HttpServer(
             }
 
             method == "GET" && path == "/" -> {
-                if (role == Role.NONE) unauthorized(output)
-                else respond(output, 200, "text/html; charset=utf-8", PAGE.toByteArray())
+                // Served without a session: this is the login form's shell.
+                // Everything it can show comes from the gated API.
+                respond(output, 200, "text/html; charset=utf-8", PAGE.toByteArray())
             }
 
             else -> respond(output, 404, "text/plain", "not found".toByteArray())
@@ -300,15 +336,19 @@ class HttpServer(
 
     // ---- auth ---------------------------------------------------------
 
-    private fun authRole(headers: Map<String, String>): Role {
-        parseSid(headers["cookie"])?.let { sid ->
+    private fun authWho(headers: Map<String, String>): Who {
+        val cookie = headers["cookie"]
+        parseSid(cookie)?.let { sid ->
             val exp = sessions[sid]
-            if (exp != null && exp > System.currentTimeMillis()) return Role.ADMIN
+            if (exp != null && exp > System.currentTimeMillis()) return Who(Role.ADMIN, "session")
         }
+        // "Sign out" has to hold even when the browser has the Basic password
+        // cached: it will keep sending it, so it is ignored until the user logs
+        // in through the form again.
         val auth = headers["authorization"]
-        if (auth != null && auth.startsWith("Basic ", ignoreCase = true)) {
+        if (!hasCookie(cookie, "nobasic") && auth != null && auth.startsWith("Basic ", ignoreCase = true)) {
             val key = basicKey(auth)
-            if (basicOk.containsKey(key)) return Role.ADMIN
+            if (basicOk.containsKey(key)) return Who(Role.ADMIN, "basic")
             try {
                 val dec = String(Base64.decode(auth.substring(6).trim(), Base64.DEFAULT))
                 val i = dec.indexOf(':')
@@ -317,12 +357,12 @@ class HttpServer(
                         basicOk.minByOrNull { it.value }?.let { basicOk.remove(it.key) }
                     }
                     basicOk[key] = System.currentTimeMillis()
-                    return Role.ADMIN
+                    return Who(Role.ADMIN, "basic")
                 }
             } catch (_: Exception) {
             }
         }
-        return if (Prefs.anonView) Role.ANON else Role.NONE
+        return if (Prefs.anonView) Who(Role.ANON, "anon") else Who(Role.NONE, "none")
     }
 
     private fun basicKey(auth: String): String {
@@ -330,14 +370,18 @@ class HttpServer(
         return Base64.encodeToString(d, Base64.NO_WRAP)
     }
 
-    private fun parseSid(cookie: String?): String? {
+    private fun cookieValue(cookie: String?, name: String): String? {
         if (cookie == null) return null
         for (part in cookie.split(';')) {
             val kv = part.trim()
-            if (kv.startsWith("sid=")) return kv.substring(4)
+            if (kv.startsWith("$name=")) return kv.substring(name.length + 1)
         }
         return null
     }
+
+    private fun parseSid(cookie: String?): String? = cookieValue(cookie, "sid")
+
+    private fun hasCookie(cookie: String?, name: String): Boolean = cookieValue(cookie, name) != null
 
     private fun snapshotName(): String =
         "andWebCam-" +
