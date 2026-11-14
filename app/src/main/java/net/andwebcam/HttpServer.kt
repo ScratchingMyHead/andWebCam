@@ -292,8 +292,12 @@ class HttpServer(
             }
 
             // Whoever may watch the stream may also save a frame from it.
+            // Stopped streaming means no frame: capturing one anyway opened the
+            // camera for a single frame that was often still black.
             method == "GET" && path == "/snapshot" -> {
-                if (role == Role.NONE) unauthorized(output) else {
+                if (role == Role.NONE) unauthorized(output) else if (!host.isStreaming()) {
+                    respond(output, 503, "text/plain", "streaming stopped".toByteArray())
+                } else {
                     val jpeg = host.snapshot()
                     if (jpeg == null) {
                         respond(output, 503, "text/plain", "no frame available".toByteArray())

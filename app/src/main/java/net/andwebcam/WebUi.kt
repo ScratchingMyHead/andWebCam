@@ -36,7 +36,7 @@ object WebUi {
  .busy { position:absolute; top:10px; left:10px; z-index:5; display:flex; align-items:center; gap:8px; padding:5px 12px 5px 9px; border:1px solid #33506b; border-radius:20px; background:#000a; color:#cde; font-size:12px }
  .busy .spin { width:11px; height:11px; border-radius:50%; border:2px solid #33506b; border-top-color:#7cc4ff; animation:spin .7s linear infinite }
  .busy.err { border-color:#7a2f2f; color:#f99 }
- .busy.err .spin { display:none }
+ .busy.err .spin, .busy.note .spin { display:none }
  .video.applying img { filter:brightness(.7) }
  @keyframes spin { to { transform:rotate(360deg) } }
  .panel { flex:0 1 320px; background:#1b1b1b; border-radius:8px; padding:14px }
@@ -385,8 +385,17 @@ function showBusy(text) {
 function hideBusy() {
   clearTimeout(busyTimer);
   el('busy').classList.add('hidden');
-  el('busy').classList.remove('err');
+  el('busy').classList.remove('err', 'note');
   el('video').classList.remove('applying');
+}
+// A plain note in the same chip, with no spinner: nothing is being applied.
+function showBusyNote(text) {
+  clearTimeout(busyTimer);
+  el('busy').classList.remove('hidden', 'err');
+  el('busy').classList.add('note');
+  el('busyText').textContent = text;
+  el('video').classList.remove('applying');
+  busyTimer = setTimeout(hideBusy, 3000);
 }
 // A failure is shown in the same chip, because the snapshot button is in the
 // header and view-only users have no settings panel to write into.
@@ -556,6 +565,12 @@ function grabSnapshot(name, handle) {
 }
 el('snap').onclick = function() {
   if (el('snap').disabled) { return; }
+  // Nothing to photograph while streaming is stopped - and opening the camera
+  // just for this produced a black first frame, which is worse than a note.
+  if (!(window.S && window.S.streaming)) {
+    showBusyNote('Turn streaming on to take a snapshot');
+    return;
+  }
   var name = snapName();
   var pick = null;
   if (window.showSaveFilePicker) {
