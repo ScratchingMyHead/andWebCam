@@ -32,6 +32,9 @@ class HttpServer(
         fun changePassword(newPass: String)
         fun isStreaming(): Boolean
 
+        /** One JPEG at the current settings, or null if none could be taken. */
+        fun snapshot(): ByteArray?
+
         /** Returns null on success, or an error message. */
         fun reboot(): String?
 
@@ -253,6 +256,21 @@ class HttpServer(
                 }
             }
 
+            // Whoever may watch the stream may also save a frame from it.
+            method == "GET" && path == "/snapshot" -> {
+                if (role == Role.NONE) unauthorized(output) else {
+                    val jpeg = host.snapshot()
+                    if (jpeg == null) {
+                        respond(output, 503, "text/plain", "no frame available".toByteArray())
+                    } else {
+                        respond(
+                            output, 200, "image/jpeg", jpeg,
+                            listOf("Content-Disposition: attachment; filename=\"${snapshotName()}\""),
+                        )
+                    }
+                }
+            }
+
             method == "GET" && path == "/" -> {
                 if (role == Role.NONE) unauthorized(output)
                 else respond(output, 200, "text/html; charset=utf-8", PAGE.toByteArray())
@@ -320,6 +338,11 @@ class HttpServer(
         }
         return null
     }
+
+    private fun snapshotName(): String =
+        "andWebCam-" +
+            java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+                .format(java.util.Date()) + ".jpg"
 
     private fun newToken(): String {
         val b = ByteArray(24)

@@ -148,6 +148,43 @@ class CameraController(
     }
 
     /**
+     * One JPEG at the current settings, for the snapshot button. If nobody is
+     * streaming the camera is opened for this single frame; the caller closes
+     * it again. The callback runs on the camera thread (or with null once the
+     * timeout expires) and is always called exactly once.
+     */
+    fun captureOnce(openIfClosed: Boolean, cb: (ByteArray?) -> Unit) = handler.post {
+        if (snap != null) { cb(null); return@post }
+        val s = Snap(cb)
+        snap = s
+        handler.postDelayed({
+            if (snap === s) {
+                snap = null
+                s.deliver(null)
+            }
+        }, 6000)
+        // A snapshot works with streaming stopped, so the camera may have to
+        // be opened for it; it is closed again by the caller once the frame
+        // is out. Not when a viewer is already waiting for it to open, though:
+        // restarting the device there would interrupt that viewer.
+        if (openIfClosed && !active) {
+            wantOpen = true
+            requestStart()
+        }
+    }
+
+    private class Snap(val cb: (ByteArray?) -> Unit) {
+        private var sent = false
+        fun deliver(jpeg: ByteArray?) {
+            if (sent) return
+            sent = true
+            cb(jpeg)
+        }
+    }
+
+    private var snap: Snap? = null
+
+    /**
      * Coalesces overlapping start requests: changing two camera settings at once
      * used to fire two concurrent openCamera() calls and disconnect the device.
      */
@@ -436,15 +473,22 @@ class CameraController(
             val t1 = System.nanoTime()
             val buf = img.planes[0].buffer
 
-            // Rate limit to the requested frame rate. The budget stays a
-            // fraction so that dropping from a faster pipeline gives the exact
-            // average rate rather than a multiple of the arriving interval.
-            val now = System.currentTimeMillis()
-            val interval = 1000.0 / fps.coerceAtLeast(1)
-            if (nextFrameAt == 0.0) nextFrameAt = now.toDouble()
-            if (now < nextFrameAt) return
-            nextFrameAt += interval
-            if (nextFrameAt < now) nextFrameAt = now + interval   // no burst after a stall
+            // A snapshot is a single picture, so it ignores the stream's
+            // cadence: waiting for the rate-limit slot would make the button
+            // feel sluggish at low frame rates for no benefit.
+            val snapNow = snap
+            if (snapNow == null) {
+                // Rate limit to the requested frame rate. The budget stays a
+                // fraction so that dropping from a faster pipeline gives the
+                // exact average rate rather than a multiple of the arriving
+                // interval.
+                val now = System.currentTimeMillis()
+                val interval = 1000.0 / fps.coerceAtLeast(1)
+                if (nextFrameAt == 0.0) nextFrameAt = now.toDouble()
+                if (now < nextFrameAt) return
+                nextFrameAt += interval
+                if (nextFrameAt < now) nextFrameAt = now + interval   // no burst after a stall
+            }
 
             val bytes = ByteArray(buf.remaining())
             buf.get(bytes)
@@ -459,7 +503,12 @@ class CameraController(
                 loggedFirstFrame = true
                 Log.i(TAG, "first frame: ${bytes.size} bytes, ${size} after trimming")
             }
-            onFrame(if (size == bytes.size) bytes else bytes.copyOf(size))
+            val frame = if (size == bytes.size) bytes else bytes.copyOf(size)
+            if (snapNow != null) {
+                if (snap === snapNow) snap = null
+                snapNow.deliver(frame)
+            }
+            onFrame(frame)
             stage(3, t3)                   // send
         } catch (e: Exception) {
             onError("frame read failed: ${e.message}")

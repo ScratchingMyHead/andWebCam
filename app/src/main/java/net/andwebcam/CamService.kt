@@ -308,6 +308,34 @@ class CamService : Service(), HttpServer.Host {
 
     override fun isStreaming(): Boolean = streamingEnabled
 
+    /**
+     * A single JPEG at the current settings. While the camera is running the
+     * newest streamed frame is exactly what is on screen, so it is reused;
+     * otherwise one frame is captured, opening the camera if nobody is
+     * watching (and closing it again afterwards).
+     */
+    override fun snapshot(): ByteArray? {
+        if (camera.active) hub.latest?.let { return it }
+
+        val latch = java.util.concurrent.CountDownLatch(1)
+        val out = arrayOfNulls<ByteArray>(1)
+        val viewerWaiting = hub.count > 0
+        camera.captureOnce(openIfClosed = !viewerWaiting) { jpeg ->
+            out[0] = jpeg
+            latch.countDown()
+        }
+        try {
+            latch.await(7, TimeUnit.SECONDS)
+        } catch (_: InterruptedException) {
+        }
+        // If the camera was opened just for this picture, close it again
+        // unless somebody started watching in the meantime.
+        mainHandler.post {
+            if (started && hub.count == 0) camera.stop()
+        }
+        return out[0]
+    }
+
     override fun diag(mode: String, seconds: Int, resolution: String): String {
         if (mode == "threads") {
             val sb = StringBuilder()

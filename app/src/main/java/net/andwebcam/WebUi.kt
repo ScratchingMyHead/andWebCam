@@ -50,6 +50,11 @@ object WebUi {
  .actions { display:flex; gap:8px; flex-wrap:wrap }
  .paneClose { margin-left:auto; padding:5px 10px; font-size:15px; line-height:1.1; background:#2b2b2b; color:#9ab }
  .paneClose:hover { background:#3a3a3a; color:#fff }
+ .iconbtn { display:inline-flex; align-items:center; justify-content:center; padding:8px 10px; background:#333; color:#b9c6d4 }
+ .iconbtn:hover:not(:disabled) { background:#3d3d3d; color:#fff }
+ .iconbtn:disabled { opacity:.5; cursor:default }
+ .iconbtn svg { width:19px; height:19px; display:block; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
+ .snapRow { margin-top:8px }
  .seg { display:flex }
  .seg button { background:#262626; color:#bbb; padding:7px 10px; font-size:12px; border-radius:0; border-left:1px solid #111 }
  .seg button:hover { background:#333; color:#eee }
@@ -77,9 +82,9 @@ object WebUi {
     <button data-scale="h" title="Fit height (drag to pan)">H</button>
     <button data-scale="1" title="Actual size, 1:1 (drag to pan)">1:1</button>
   </span>
-  <button id="paneToggle" class="secondary hidden" title="Hide the settings pane">Settings</button>
-  <button id="logoutBtn" class="secondary hidden">Log out</button>
-  <button id="loginBtn" class="secondary">Log in</button>
+  <button id="paneToggle" class="iconbtn hidden" title="Hide the settings pane" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
+  <button id="logoutBtn" class="iconbtn hidden" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+  <button id="loginBtn" class="iconbtn" title="Log in" aria-label="Log in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></button>
 </header>
 <main>
   <div class="banner">
@@ -103,6 +108,9 @@ object WebUi {
         <button id="toggle">Stop streaming</button>
         <button id="reboot" class="danger">Restart phone</button>
         <button id="paneClose" class="paneClose" title="Hide the settings pane" aria-label="Hide the settings pane">&raquo;</button>
+      </div>
+      <div class="actions snapRow">
+        <button id="snap" class="iconbtn" title="Save a snapshot" aria-label="Save a snapshot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
       </div>
       <p class="err" id="actionMsg"></p>
 
@@ -369,9 +377,9 @@ window.addEventListener('resize', updatePan);
 // the control is used until shortly after the phone acknowledges it.
 var CAMERA_KEYS = { facing:1, resolution:1, fps:1, quality:1, zoom:1, orientation:1, torch:1 };
 var busyTimer = null;
-function showBusy() {
+function showBusy(text) {
   el('busy').classList.remove('hidden');
-  el('busyText').textContent = 'Applying...';
+  el('busyText').textContent = text || 'Applying...';
   el('video').classList.add('applying');
 }
 function hideBusy() {
@@ -481,6 +489,69 @@ el('reboot').onclick = function() {
   actionMsg('Rebooting...');
   post('/api/reboot', {}).then(function(r) {
     if (r.ok === false) { actionMsg(r.error || 'Reboot failed'); }
+  });
+};
+// A snapshot is the frame as the camera is configured right now: the phone
+// sends a JPEG at the current resolution, not a scaling of what is on screen.
+// Where the browser can offer a real save dialog it is asked for before the
+// request, while the click still counts as the user gesture it requires.
+function snapName() {
+  var d = new Date();
+  function p(n) { return (n < 10 ? '0' : '') + n; }
+  return 'andWebCam-' + d.getFullYear() + p(d.getMonth() + 1) + p(d.getDate()) + '-' +
+    p(d.getHours()) + p(d.getMinutes()) + p(d.getSeconds()) + '.jpg';
+}
+function downloadBlob(blob, name) {
+  var url = URL.createObjectURL(blob);
+  var a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(function() { URL.revokeObjectURL(url); }, 5000);
+}
+function grabSnapshot(name, handle) {
+  var btn = el('snap');
+  btn.disabled = true;
+  showBusy('Taking snapshot...');
+  hideBusySoon(15000);
+  fetch('/snapshot', { cache: 'no-store' }).then(function(r) {
+    if (r.ok) { return r.blob(); }
+    if (r.status === 401) { throw new Error('not logged in'); }
+    if (r.status === 503) { throw new Error('the camera produced no frame'); }
+    throw new Error('request failed (' + r.status + ')');
+  }).then(function(blob) {
+    if (!handle) { downloadBlob(blob, name); return; }
+    return handle.createWritable().then(function(w) {
+      return w.write(blob).then(function() { return w.close(); });
+    });
+  }).then(function() {
+    hideBusy();
+  }).catch(function(e) {
+    hideBusy();
+    actionMsg('Snapshot failed: ' + (e && e.message ? e.message : 'unknown error'));
+  }).then(function() {
+    btn.disabled = false;
+  });
+}
+el('snap').onclick = function() {
+  if (el('snap').disabled) { return; }
+  var name = snapName();
+  var pick = null;
+  if (window.showSaveFilePicker) {
+    try {
+      pick = window.showSaveFilePicker({
+        suggestedName: name,
+        types: [{ description: 'JPEG image', accept: { 'image/jpeg': ['.jpg', '.jpeg'] } }]
+      });
+    } catch (e) { pick = null; }
+  }
+  if (!pick) { grabSnapshot(name, null); return; }
+  pick.then(function(h) { grabSnapshot(name, h); }).catch(function(e) {
+    // Cancelling the dialog is not an error, and no picture was taken.
+    if (e && (e.name === 'AbortError' || e.name === 'NotAllowedError')) { return; }
+    grabSnapshot(name, null);
   });
 };
 el('apply').onclick = function() {
