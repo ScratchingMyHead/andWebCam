@@ -600,8 +600,9 @@ el('paneToggle').onclick = function() {
 el('paneClose').onclick = el('paneToggle').onclick;
 el('loginBtn').onclick = function() { el('loginForm').classList.toggle('hidden'); };
 el('logoutBtn').onclick = function() { post('/api/logout', {}).then(function() { location.reload(); }); };
-el('doLogin').onclick = function() {
+function doLogin() {
   var b = el('doLogin');
+  if (b.disabled) { return; }
   b.disabled = true;
   b.textContent = 'Logging in...';
   el('loginErr').textContent = '';
@@ -615,7 +616,14 @@ el('doLogin').onclick = function() {
     b.textContent = 'Log in';
     el('loginErr').textContent = 'Could not reach the phone';
   });
-};
+}
+el('doLogin').onclick = doLogin;
+// There is no <form> around these fields, so Enter does nothing on its own.
+function loginKey(e) {
+  if (e.key === 'Enter') { e.preventDefault(); doLogin(); }
+}
+el('l_user').addEventListener('keydown', loginKey);
+el('l_pass').addEventListener('keydown', loginKey);
 scaleMode = scalePref() || 'fit';
 applyScale();
 refresh();
