@@ -39,7 +39,9 @@ On first launch the app requests everything it needs, as normal system dialogs:
 * **Notifications** (Android 13+) — the service runs as a foreground service and
   needs a visible notification.
 * **Ignore battery optimisation** — so the stream keeps running with the screen
-  off instead of being dozed.
+  off instead of being dozed, and the phone stays on Wi-Fi. If that dialog was
+  skipped, the app's screen offers it again; without it the phone can drop off
+  the network while asleep.
 
 Accept all three. Everything else — camera, resolution, frame rate, quality,
 zoom, orientation, torch, port, service name, automatic start — is configured
@@ -173,11 +175,17 @@ ffmpeg -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
   years.
 * Orientation is applied as the JPEG's EXIF orientation, which browsers and
   ffmpeg honour without any transcoding cost on the phone.
-* While somebody is watching, the service holds a high-performance Wi-Fi lock
-  and a partial wake lock, so the stream keeps running at full rate with the
-  screen off. With no viewers both are released and the phone is allowed to
-  sleep; a multicast lock stays held so it remains discoverable, and a new
-  connection wakes it.
+* While somebody is watching, the service holds a partial wake lock so the CPU
+  stays up for a full-rate stream. The Wi-Fi lock is held for as long as the
+  service runs, because it is the radio that has to notice the access point
+  disappearing: with it asleep the phone stayed off the network until the
+  screen was turned on. With no viewers the CPU sleeps again, and every few
+  minutes a maintenance alarm wakes it briefly to ask Wi-Fi to reassociate and
+  to correct the address if it changed. Exempt the app from battery
+  optimisation (the phone offers it) or the system will suspend it anyway.
+* The address is read from the network, not remembered: when it changes, the
+  page, the notification and the mDNS announcement follow it, so
+  `andwebcam.local` keeps resolving to the phone.
 * A viewer connection can be reset by the network; the hub drops the client
   after three failed writes, the camera closes a few seconds later, and the web
   page or ffmpeg reconnect wakes it up again.

@@ -41,8 +41,13 @@ class Mdns(
     private var receiver: Thread? = null
     private var announcer: Thread? = null
 
+    /** True while a socket is open and answering, so a caller can heal it. */
+    val alive: Boolean get() = running && socket != null
+
     fun start() {
-        stop()
+        // One responder per instance: the service builds a new Mdns whenever it
+        // has to re-announce, so there is never a stale thread to worry about.
+        if (receiver != null) return
         receiver = Thread({ receiveLoop() }, "andwebcam-mdns-rx").apply { isDaemon = true; start() }
     }
 
@@ -50,6 +55,12 @@ class Mdns(
         running = false
         try { socket?.close() } catch (_: Exception) {}
         socket = null
+        // The announcer sleeps for up to 45s between packets; wake it so it
+        // notices instead of sending on the socket that just closed.
+        announcer?.interrupt()
+        receiver?.interrupt()
+        announcer = null
+        receiver = null
     }
 
     // ------------------------------------------------------------------

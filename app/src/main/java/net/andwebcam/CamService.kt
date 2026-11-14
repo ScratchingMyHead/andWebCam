@@ -1,5 +1,6 @@
 package net.andwebcam
 
+import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -10,6 +11,10 @@ import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
+import android.net.ConnectivityManager
+import android.net.LinkProperties
+import android.net.Network
+import android.net.NetworkCapabilities
 import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.Handler
@@ -35,8 +40,13 @@ class CamService : Service(), HttpServer.Host {
         const val ACTION_START = "net.andwebcam.START"
         const val ACTION_STOP = "net.andwebcam.STOP"
         const val ACTION_RELOAD = "net.andwebcam.RELOAD"
+        const val ACTION_MAINTENANCE = "net.andwebcam.MAINTENANCE"
         private const val CH_ID = "andwebcam"
         private const val NOTIF_ID = 1
+        private const val REQ_MAINTENANCE = 2
+
+        /** How often to wake up and make sure the network is still there. */
+        private const val MAINTENANCE_MS = 5 * 60_000L
 
         fun start(ctx: Context) = send(ctx, ACTION_START)
         fun stop(ctx: Context) = send(ctx, ACTION_STOP)
@@ -57,6 +67,7 @@ class CamService : Service(), HttpServer.Host {
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: WifiManager.MulticastLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
+    private var netCallback: ConnectivityManager.NetworkCallback? = null
     private var scheduler: ScheduledExecutorService? = null
     private var lastFrameCount = 0L
     private var started = false
@@ -76,6 +87,7 @@ class CamService : Service(), HttpServer.Host {
             updateNotification()
         }
     }
+    private val refreshNet = Runnable { refreshNetwork(announce = true) }
 
     override fun onCreate() {
         super.onCreate()
@@ -110,6 +122,12 @@ class CamService : Service(), HttpServer.Host {
                 camera.start()
                 return START_STICKY
             }
+            ACTION_MAINTENANCE -> {
+                // The alarm is also a safety net: if the process died, this
+                // brings the whole service back.
+                if (!started) startEverything() else maintainNetwork()
+                return START_STICKY
+            }
             else -> startEverything()
         }
         return START_STICKY
@@ -141,6 +159,8 @@ class CamService : Service(), HttpServer.Host {
         // actually watching, and closes again when the last viewer leaves.
 
         startNetworking()
+        watchNetwork()
+        scheduleMaintenance()
 
         if (!camera.hasPermission()) {
             State.lastError = "Camera permission not granted. Allow the camera for andWebCam in the phone's app settings."
@@ -168,9 +188,141 @@ class CamService : Service(), HttpServer.Host {
         if (!ok) {
             State.lastError = "Could not bind port ${Prefs.port}"
         }
+        restartMdns()
+    }
+
+    private fun restartMdns() {
         mdns?.stop()
         mdns = Mdns(this, Prefs.serviceName, Prefs.port).also { it.start() }
     }
+
+    // ---- network upkeep -----------------------------------------------
+
+    /**
+     * Watches the address rather than assuming it. After the access point
+     * restarts the phone can come back on a different one, and nothing else
+     * here would notice: the server binds to every interface so it keeps
+     * working, but the page, the notification and the mDNS A record would all
+     * still name the address it used to have.
+     */
+    private fun watchNetwork() {
+        if (netCallback != null) return
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return
+        val cb = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) = networkChanged()
+            override fun onLost(network: Network) = networkChanged()
+            override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) = networkChanged()
+        }
+        try {
+            cm.registerDefaultNetworkCallback(cb)
+            netCallback = cb
+        } catch (e: Exception) {
+            Log.w(TAG, "cannot watch the network: ${e.message}")
+        }
+    }
+
+    private fun unwatchNetwork() {
+        val cb = netCallback ?: return
+        netCallback = null
+        try {
+            getSystemService(ConnectivityManager::class.java)?.unregisterNetworkCallback(cb)
+        } catch (_: Exception) {
+        }
+    }
+
+    /** Association changes arrive in bursts; wait for the dust to settle. */
+    private fun networkChanged() {
+        mainHandler.post {
+            mainHandler.removeCallbacks(refreshNet)
+            mainHandler.postDelayed(refreshNet, 600)
+        }
+    }
+
+    private fun refreshNetwork(announce: Boolean) {
+        if (!started) return
+        val ip = currentIp()
+        val changed = ip != State.ip
+        State.ip = ip
+        if (changed) Log.i(TAG, "address is now ${ip ?: "none"}")
+        // A new address has to be announced at once, and a responder whose
+        // socket died with the interface has to be rebuilt.
+        if (announce && (changed || mdns?.alive != true)) restartMdns()
+        updateNotification()
+    }
+
+    private fun currentIp(): String? {
+        // Ask the system what the Wi-Fi link has: the interface list can lag
+        // behind a re-association, and this is the address that actually works.
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val net = cm?.activeNetwork
+        if (cm != null && net != null) {
+            val caps = cm.getNetworkCapabilities(net)
+            if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) == true) {
+                for (la in cm.getLinkProperties(net)?.linkAddresses.orEmpty()) {
+                    val a = la.address
+                    if (a is Inet4Address && !a.isLoopbackAddress) return a.hostAddress
+                }
+            }
+        }
+        return localIp()
+    }
+
+    /**
+     * Deep sleep turns the radio off, and a phone that was asleep when the
+     * access point went away does not notice it came back until something wakes
+     * it - which used to be the screen. This alarm is that something: a few
+     * minutes apart it wakes the service long enough to ask Wi-Fi to
+     * reassociate and to put the right address back on the screen.
+     */
+    private fun maintenanceIntent(): PendingIntent = PendingIntent.getService(
+        this, REQ_MAINTENANCE,
+        Intent(this, CamService::class.java).setAction(ACTION_MAINTENANCE),
+        PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+    )
+
+    private fun scheduleMaintenance() {
+        try {
+            getSystemService(AlarmManager::class.java)
+                ?.setAndAllowWhileIdle(
+                    AlarmManager.RTC_WAKEUP,
+                    System.currentTimeMillis() + MAINTENANCE_MS,
+                    maintenanceIntent()
+                )
+        } catch (e: Exception) {
+            Log.w(TAG, "cannot schedule maintenance: ${e.message}")
+        }
+    }
+
+    private fun cancelMaintenance() {
+        try {
+            getSystemService(AlarmManager::class.java)?.cancel(maintenanceIntent())
+        } catch (_: Exception) {
+        }
+    }
+
+    private fun maintainNetwork() {
+        scheduleMaintenance()
+        if (!started) return
+        val cm = getSystemService(ConnectivityManager::class.java)
+        val net = cm?.activeNetwork
+        val caps = if (cm != null && net != null) cm.getNetworkCapabilities(net) else null
+        val wm = getSystemService(WifiManager::class.java)
+        if (caps?.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) != true && wm?.isWifiEnabled == true) {
+            Log.i(TAG, "no wifi connection; asking for one")
+            askWifiToReconnect(wm)
+        }
+        refreshNetwork(announce = true)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun askWifiToReconnect(wm: WifiManager) {
+        try {
+            wm.reconnect()
+        } catch (e: Exception) {
+            Log.w(TAG, "asking wifi to reconnect failed: ${e.message}")
+        }
+    }
+
 
     private fun scheduleNetRestart() {
         Thread {
@@ -225,9 +377,12 @@ class CamService : Service(), HttpServer.Host {
         started = false
         mainHandler.removeCallbacks(cameraRetry)
         mainHandler.removeCallbacks(idleStop)
+        mainHandler.removeCallbacks(refreshNet)
         hub.disconnectAll()
         mdns?.stop()
         mdns = null
+        unwatchNetwork()
+        cancelMaintenance()
         server.stop()
         camera.stop()
         releaseLocks()
@@ -376,17 +531,26 @@ class CamService : Service(), HttpServer.Host {
     // ---- locks / notification -----------------------------------------
 
     /**
-     * A full-rate stream needs the radio at high performance and the CPU awake,
-     * but only while somebody is actually watching. With no viewers both are
-     * released so the phone can sleep: an incoming connection still wakes it,
-     * and the multicast lock stays held so mDNS keeps answering and the page
-     * stays reachable.
+     * The radio is kept out of power save for as long as the service runs, not
+     * only while somebody is watching. It is the radio, not the CPU, that has
+     * to notice the access point disappearing: with it asleep the phone sat
+     * there without a network until the screen was turned on, and a webcam
+     * nobody can reach is no webcam. The CPU is a different matter - it is only
+     * held awake while somebody is actually watching, so an idle phone still
+     * sleeps between the maintenance alarms.
      */
     private fun updateLocks(watching: Boolean) {
         val wm = applicationContext.getSystemService(WifiManager::class.java)
         if (multicastLock == null) {
             multicastLock = wm.createMulticastLock("andwebcam").apply {
                 setReferenceCounted(true)
+                acquire()
+            }
+        }
+        if (wifiLock == null) {
+            @Suppress("DEPRECATION")
+            wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "andwebcam:radio").apply {
+                setReferenceCounted(false)
                 acquire()
             }
         }
@@ -398,20 +562,9 @@ class CamService : Service(), HttpServer.Host {
                     acquire()
                 }
             }
-            if (wifiLock == null) {
-                // With the screen off the Wi-Fi stack drops into power save,
-                // which makes a full-rate MJPEG stream stall and reset.
-                @Suppress("DEPRECATION")
-                wifiLock = wm.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "andwebcam:stream").apply {
-                    setReferenceCounted(false)
-                    acquire()
-                }
-            }
         } else {
             try { wakeLock?.release() } catch (_: Exception) {}
             wakeLock = null
-            try { wifiLock?.release() } catch (_: Exception) {}
-            wifiLock = null
         }
     }
 

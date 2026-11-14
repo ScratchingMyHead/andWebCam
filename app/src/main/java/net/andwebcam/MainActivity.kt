@@ -38,6 +38,8 @@ class MainActivity : Activity() {
     private lateinit var urlView: TextView
     private lateinit var credsView: TextView
     private lateinit var errorView: TextView
+    private lateinit var batteryRow: Button
+    private lateinit var batteryHint: TextView
     private lateinit var ownerRow: View
     private lateinit var ownerMsg: TextView
     private var fingerprint = ""
@@ -108,18 +110,25 @@ class MainActivity : Activity() {
      * An unattended stream dies if the system dozes the app, so ask once to be
      * exempt from battery optimisation.
      */
-    private fun requestBatteryExemption() {
-        if (Prefs.batteryPromptAsked) return
+    private fun requestBatteryExemption(force: Boolean = false) {
         val pm = getSystemService(PowerManager::class.java) ?: return
         if (pm.isIgnoringBatteryOptimizations(packageName)) return
-        Prefs.batteryPromptAsked = true
+        if (!force) {
+            if (Prefs.batteryPromptAsked) return
+            Prefs.batteryPromptAsked = true
+        }
         try {
             startActivity(
                 Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS)
                     .setData(Uri.parse("package:$packageName"))
             )
         } catch (_: Exception) {
-            // Some ROMs have no handler for this; not fatal.
+            // Some ROMs have no handler for the per-app prompt; fall back to
+            // the list, where the app can be found by hand.
+            try {
+                startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS))
+            } catch (_: Exception) {
+            }
         }
     }
 
@@ -151,6 +160,11 @@ class MainActivity : Activity() {
         val dpm = getSystemService(DevicePolicyManager::class.java)
         ownerRow.visibility =
             if (dpm?.isDeviceOwnerApp(packageName) == true) View.VISIBLE else View.GONE
+
+        val exempt = getSystemService(PowerManager::class.java)
+            ?.isIgnoringBatteryOptimizations(packageName) == true
+        batteryRow.visibility = if (exempt) View.GONE else View.VISIBLE
+        batteryHint.visibility = batteryRow.visibility
     }
 
     /**
@@ -214,6 +228,18 @@ class MainActivity : Activity() {
             setOnClickListener { CamService.start(this@MainActivity) }
         }
         root.addView(restart)
+        root.addView(spacer())
+
+        // Samsung and its friends suspend an app that is not exempt from
+        // battery optimisation, and the Wi-Fi radio goes with it: the phone is
+        // then unreachable until the screen is turned on. Hidden once granted.
+        batteryRow = Button(this).apply {
+            text = "Allow background operation"
+            setOnClickListener { requestBatteryExemption(force = true) }
+        }
+        root.addView(batteryRow)
+        batteryHint = text("Battery optimisation is on, so the phone may drop off the network while it sleeps.", 13f)
+        root.addView(batteryHint)
         root.addView(spacer())
 
         errorView = text("", 13f)
