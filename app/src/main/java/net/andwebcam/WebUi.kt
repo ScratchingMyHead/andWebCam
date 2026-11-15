@@ -453,7 +453,7 @@ function refresh() {
     applyVideo(s);
     // A poll that was due long ago means the machine was suspended, and the
     // stream connection went with it: nothing about the element says so.
-    if (!document.hidden && gap > 10000 && s.streaming) { startVideo(); }
+    if (gap > 10000 && s.streaming) { startVideo(); }
     if (s.streaming && !s.locked) { checkVideo(); }
     if (s.locked) {
       // Signed out: there is no stream to announce, only the way back in.
