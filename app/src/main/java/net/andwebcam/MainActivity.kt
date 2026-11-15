@@ -36,6 +36,8 @@ class MainActivity : Activity() {
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var enabledSwitch: Switch
+    /** Set while the switch is being put back after a cancelled confirmation. */
+    private var revertingSwitch = false
     private lateinit var disabledHint: TextView
     private lateinit var connectBlock: View
     private lateinit var restartRow: View
@@ -143,6 +145,31 @@ class MainActivity : Activity() {
     }
 
     /**
+     * Switching off is the one action that cannot be undone from a browser, and
+     * the one thing worth saying out loud is that it stays off after a restart.
+     */
+    private fun confirmDisable() {
+        AlertDialog.Builder(this)
+            .setTitle("Turn off andWebCam?")
+            .setMessage(
+                "The service stops now, its notification goes away, and it will not " +
+                    "start when the phone is turned on again. Only this screen can " +
+                    "turn it back on."
+            )
+            .setNegativeButton("Cancel") { _, _ -> revertSwitch() }
+            .setPositiveButton("Turn off") { _, _ -> setEnabledState(false) }
+            .setOnCancelListener { revertSwitch() }
+            .show()
+    }
+
+    private fun revertSwitch() {
+        revertingSwitch = true
+        enabledSwitch.isChecked = true
+        revertingSwitch = false
+        update()
+    }
+
+    /**
      * The one place that switches the whole thing off. Off means stopped now,
      * no start at boot, no maintenance alarm and no notification, and only this
      * switch turns it back on.
@@ -243,7 +270,10 @@ class MainActivity : Activity() {
         enabledSwitch = Switch(this).apply {
             text = "Enabled"
             isChecked = Prefs.enabled
-            setOnCheckedChangeListener { _, on -> setEnabledState(on) }
+            setOnCheckedChangeListener { _, on ->
+                if (revertingSwitch) return@setOnCheckedChangeListener
+                if (on) setEnabledState(true) else confirmDisable()
+            }
         }
         root.addView(enabledSwitch)
         disabledHint = text("Off. Nothing runs, and it will not start with the phone.", 13f).apply {
