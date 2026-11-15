@@ -44,7 +44,10 @@ class CameraController(
         val maxFps: Int = 0,
     )
 
-    companion object { private const val TAG = "andWebCam" }
+    companion object {
+        private const val TAG = "andWebCam"
+        private const val OPEN_TIMEOUT_MS = 8000L
+    }
 
     private val mgr = ctx.getSystemService(Context.CAMERA_SERVICE) as CameraManager
     private val thread = HandlerThread("andwebcam-camera").apply { start() }
@@ -74,6 +77,8 @@ class CameraController(
     private var opening = false
     private var restartQueued = false
     private var wantOpen = false
+    /** Bumped for every open attempt, so a late callback can tell it is stale. */
+    private var openGen = 0
 
     val active: Boolean get() = device != null
 
@@ -136,6 +141,7 @@ class CameraController(
         wantOpen = false
         opening = false
         restartQueued = false
+        openGen++          // an open still in flight must not come back to life
         stopInternal()
     }
 
@@ -232,9 +238,30 @@ class CameraController(
     private fun openDevice(id: String) {
         stopInternal()
         opening = true
+        // A HAL can accept openCamera() and then never call back, which leaves
+        // `opening` true for ever: every later start() only queues a restart
+        // that never runs, so the camera stays dark until the user stops and
+        // starts again (stop() clears the flag). Seen after a long sleep. The
+        // timeout gives up and reports an error, and the service's retry opens
+        // it again. A callback that arrives late belongs to a dead attempt, so
+        // each attempt carries a generation.
+        val gen = ++openGen
+        handler.postDelayed({
+            if (opening && gen == openGen) {
+                Log.w(TAG, "camera did not open in ${OPEN_TIMEOUT_MS}ms")
+                openGen++
+                opening = false
+                restartQueued = false
+                onError("Camera did not open")
+            }
+        }, OPEN_TIMEOUT_MS)
         try {
             mgr.openCamera(id, object : CameraDevice.StateCallback() {
                 override fun onOpened(d: CameraDevice) {
+                    if (gen != openGen) {
+                        try { d.close() } catch (_: Exception) {}
+                        return
+                    }
                     opening = false
                     if (!wantOpen || restartQueued) {
                         restartQueued = false
@@ -247,6 +274,10 @@ class CameraController(
                 }
 
                 override fun onDisconnected(d: CameraDevice) {
+                    if (gen != openGen) {
+                        try { d.close() } catch (_: Exception) {}
+                        return
+                    }
                     opening = false
                     d.close()
                     if (device === d) device = null
@@ -255,6 +286,10 @@ class CameraController(
                 }
 
                 override fun onError(d: CameraDevice, error: Int) {
+                    if (gen != openGen) {
+                        try { d.close() } catch (_: Exception) {}
+                        return
+                    }
                     opening = false
                     d.close()
                     if (device === d) device = null
@@ -263,6 +298,7 @@ class CameraController(
                 }
             }, handler)
         } catch (e: Exception) {
+            openGen++
             opening = false
             onError("openCamera failed: ${e.message}")
         }

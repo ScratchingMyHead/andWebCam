@@ -221,6 +221,7 @@ var showingVideo = null;
 var vidRetry = null;
 var vidLoad = null;
 var vidPoll = null;
+var vidMisses = 0;
 // While the first frame is on its way the image element would otherwise show a
 // broken icon and its alt text, so it is hidden behind a plain placeholder until
 // a frame has actually been decoded (the load event is not delivered for
@@ -243,6 +244,7 @@ function setLoading(on) {
 }
 function startVideo() {
   var img = el('vid');
+  vidMisses = 0;
   img.style.display = '';
   setLoading(true);
   img.src = '/video?t=' + Date.now();
@@ -252,6 +254,7 @@ function stopVideo() {
   clearTimeout(vidRetry);
   clearInterval(vidPoll);
   clearTimeout(vidLoad);
+  vidMisses = 0;
   var img = el('vid');
   img.removeAttribute('src');
   img.style.display = 'none';
@@ -264,6 +267,26 @@ function applyVideo(s) {
   showingVideo = want;
   if (want) { startVideo(); } else { stopVideo(); }
 }
+// A stream that stops delivering says nothing about it. A browser that lost the
+// multipart boundary, or a connection that died while the machine was asleep,
+// leaves an element that never decodes a frame and never fires an error, so the
+// page can sit there with the stream enabled and show nothing for ever - and
+// because the page already believes it is showing the stream, asking for it
+// again changes nothing. Reloading the source is what stopping and starting did
+// by hand, so that is what is done here once a few polls have seen no frame.
+function checkVideo() {
+  if (el('vid').naturalWidth > 0) { vidMisses = 0; return; }
+  if (++vidMisses >= 3) { startVideo(); }
+}
+// Coming back to the tab, or to the machine: the stream connection did not
+// survive the time away and will never report an error, so it is replaced
+// rather than trusted. A timer that did not run for a long time is what a
+// suspended machine looks like, and a tab becoming visible is what a switch
+// looks like; both want a fresh connection.
+var lastPoll = Date.now();
+document.addEventListener('visibilitychange', function() {
+  if (!document.hidden && window.S && window.S.streaming) { startVideo(); }
+});
 // The stream can be cut by the network; reconnect instead of showing a dead image.
 el('vid').onload = function() { setLoading(false); };
 el('vid').onerror = function() {
@@ -413,6 +436,9 @@ function hideBusySoon(ms) {
 }
 function refresh() {
   fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
+    var now = Date.now();
+    var gap = now - lastPoll;
+    lastPoll = now;
     window.S = s;
     el('who').textContent = s.admin ? 'admin' : (s.anonView ? 'view-only' : 'locked');
     el('who').className = 'badge ' + (s.admin ? '' : (s.anonView ? 'anon' : 'locked'));
@@ -425,6 +451,10 @@ function refresh() {
     el('i_torch').textContent = s.torch ? (s.torchAvailable ? 'on' : 'n/a') : 'off';
     el('i_view').textContent = (s.clients || 0);
     applyVideo(s);
+    // A poll that was due long ago means the machine was suspended, and the
+    // stream connection went with it: nothing about the element says so.
+    if (!document.hidden && gap > 10000 && s.streaming) { startVideo(); }
+    if (s.streaming && !s.locked) { checkVideo(); }
     if (s.locked) {
       // Signed out: there is no stream to announce, only the way back in.
       el('stopped').classList.add('hidden');
