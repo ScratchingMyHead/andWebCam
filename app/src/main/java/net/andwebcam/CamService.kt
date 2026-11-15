@@ -112,6 +112,8 @@ class CamService : Service(), HttpServer.Host {
     override fun onBind(intent: Intent?): IBinder? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        // Stop always works; everything else has to be allowed to run.
+        if (intent?.action != ACTION_STOP && disabledNow()) return START_NOT_STICKY
         when (intent?.action) {
             ACTION_STOP -> {
                 stopEverything()
@@ -132,6 +134,23 @@ class CamService : Service(), HttpServer.Host {
         }
         return START_STICKY
     }
+
+    /**
+     * Switched off on the phone: nothing runs and nothing may bring it back,
+     * not the alarm that was armed before it was switched off and not the
+     * system restarting the process. A startForegroundService() call still has
+     * to be honoured before the service goes away.
+     */
+    private fun disabledNow(): Boolean {
+        if (Prefs.enabled) return false
+        Log.i(TAG, "disabled on the phone; not starting")
+        cancelMaintenance()
+        startForegroundCompat()
+        stopEverything()
+        stopSelf()
+        return true
+    }
+
 
     override fun onDestroy() {
         stopEverything()
@@ -441,7 +460,6 @@ class CamService : Service(), HttpServer.Host {
                 "zoom" -> v.toFloatOrNull()?.let { Prefs.zoom = it }
                 "orientation" -> v.toIntOrNull()?.let { Prefs.orientation = it }
                 "anonView" -> Prefs.anonView = v.toBoolean()
-                "startOnBoot" -> Prefs.startOnBoot = v.toBoolean()
                 "autoStartStreaming" -> Prefs.autoStartStreaming = v.toBoolean()
                 "streaming" -> setStreaming(v.toBoolean())
                 "serviceName" -> if (Prefs.serviceName != v.lowercase()) { Prefs.serviceName = v; restartNet = true }

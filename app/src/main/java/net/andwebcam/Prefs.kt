@@ -29,7 +29,6 @@ object Prefs {
     private const val KEY_ORIENTATION = "orientation"
     private const val KEY_ANON_VIEW = "anon_view"
     private const val KEY_AUTO_START_STREAM = "auto_start_stream"
-    private const val KEY_START_ON_BOOT = "start_on_boot"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BATTERY_ASKED = "battery_asked"
 
@@ -117,10 +116,11 @@ object Prefs {
         get() = sp.getBoolean(KEY_AUTO_START_STREAM, true)
         set(v) = edit { putBoolean(KEY_AUTO_START_STREAM, v) }
 
-    var startOnBoot: Boolean
-        get() = sp.getBoolean(KEY_START_ON_BOOT, true)
-        set(v) = edit { putBoolean(KEY_START_ON_BOOT, v) }
-
+    /**
+     * Whether the service may run at all. Turned off and on from the phone
+     * screen only: a browser that could switch an unattended webcam off would
+     * need somebody to walk to the phone to switch it back on.
+     */
     var enabled: Boolean
         get() = sp.getBoolean(KEY_ENABLED, true)
         set(v) = edit { putBoolean(KEY_ENABLED, v) }

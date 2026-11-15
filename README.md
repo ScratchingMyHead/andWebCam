@@ -90,7 +90,12 @@ Open `https://andwebcam.local:8443/` (or the IP shown on the phone).
 * The camera itself is **only open while somebody is watching**. When the last
   viewer leaves, the camera is closed after a few seconds, so an unused phone
   does not wear out its camera or battery. The next viewer opens it again.
-* The phone screen shows whether the service is running, streaming or idle.
+* The phone screen shows whether the service is running, streaming or idle, and
+  its **Enabled** switch is the only way to stop the service itself: off means
+  stopped now, no notification, no start with the phone, and nothing but that
+  switch brings it back. It is not in the web UI on purpose — a browser that
+  could switch an unattended webcam off would need a walk to the phone to
+  switch it on again.
 
 ### Authentication
 
@@ -124,8 +129,7 @@ Settings that can be changed via `/api/settings`:
 
 `facing` (back/front), `resolution` (WxH), `fps`, `quality` (JPEG 10-100),
 `torch` (bool), `zoom` (1..max), `orientation` (0/90/180/270), `anonView`
-(bool), `autoStartStreaming` (bool), `streaming` (bool), `startOnBoot` (bool),
-`serviceName`, `port`.
+(bool), `autoStartStreaming` (bool), `streaming` (bool), `serviceName`, `port`.
 
 `streaming` takes effect immediately (it is not a stored preference; use
 `autoStartStreaming` for that). Changing `resolution`, `facing`, `serviceName`

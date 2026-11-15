@@ -21,6 +21,7 @@ import android.view.ViewGroup
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 
 /**
@@ -34,6 +35,11 @@ class MainActivity : Activity() {
     }
 
     private val handler = Handler(Looper.getMainLooper())
+    private lateinit var enabledSwitch: Switch
+    private lateinit var disabledHint: TextView
+    private lateinit var connectBlock: View
+    private lateinit var restartRow: View
+    private lateinit var fingerprintBlock: View
     private lateinit var statusView: TextView
     private lateinit var urlView: TextView
     private lateinit var credsView: TextView
@@ -57,7 +63,9 @@ class MainActivity : Activity() {
         fingerprint = try { Tls.fingerprint(this) } catch (e: Exception) { "" }
         setContentView(buildUi())
         requestStartupPermissions()
-        CamService.start(this)
+        // Switching it off on the phone has to stay off: opening the app must
+        // not bring the service back by itself.
+        if (Prefs.enabled) CamService.start(this)
     }
 
     override fun onResume() {
@@ -77,7 +85,9 @@ class MainActivity : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_PERMISSIONS) {
-            if (checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            if (Prefs.enabled &&
+                checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+            ) {
                 CamService.reload(this)
             }
             requestBatteryExemption()
@@ -132,10 +142,24 @@ class MainActivity : Activity() {
         }
     }
 
+    /**
+     * The one place that switches the whole thing off. Off means stopped now,
+     * no start at boot, no maintenance alarm and no notification, and only this
+     * switch turns it back on.
+     */
+    private fun setEnabledState(on: Boolean) {
+        Prefs.enabled = on
+        if (on) CamService.start(this) else CamService.stop(this)
+        update()
+    }
+
     private fun update() {
         val name = "${Prefs.serviceName}.local"
         val url = "https://$name:${Prefs.port}/"
+        val enabled = Prefs.enabled
+        if (enabledSwitch.isChecked != enabled) enabledSwitch.isChecked = enabled
         statusView.text = when {
+            !enabled -> "Disabled"
             !State.running -> "Stopped"
             !State.streaming -> "Running  -  streaming stopped"
             !State.cameraActive -> "Running  -  idle"
@@ -143,8 +167,15 @@ class MainActivity : Activity() {
         }
         urlView.text = url + "\n" + (State.ip ?: "no network address")
 
+        // Nothing to connect to and nothing to capture while it is off, so
+        // everything that belongs to a running service goes away with it.
+        connectBlock.visibility = shown(enabled)
+        restartRow.visibility = shown(enabled)
+        fingerprintBlock.visibility = shown(enabled)
+        disabledHint.visibility = shown(!enabled)
+
         val pw = Prefs.displayedPassword()
-        if (pw != null) {
+        if (pw != null && enabled) {
             credsView.visibility = View.VISIBLE
             credsView.text = "Admin login for the web UI\n" +
                 "user:  ${Prefs.adminUser}\n" +
@@ -155,7 +186,7 @@ class MainActivity : Activity() {
         }
 
         errorView.text = State.lastError?.let { "Last error: $it" } ?: ""
-        errorView.visibility = if (State.lastError == null) View.GONE else View.VISIBLE
+        errorView.visibility = if (State.lastError == null || !enabled) View.GONE else View.VISIBLE
 
         val dpm = getSystemService(DevicePolicyManager::class.java)
         ownerRow.visibility =
@@ -163,9 +194,11 @@ class MainActivity : Activity() {
 
         val exempt = getSystemService(PowerManager::class.java)
             ?.isIgnoringBatteryOptimizations(packageName) == true
-        batteryRow.visibility = if (exempt) View.GONE else View.VISIBLE
+        batteryRow.visibility = shown(enabled && !exempt)
         batteryHint.visibility = batteryRow.visibility
     }
+
+    private fun shown(on: Boolean): Int = if (on) View.VISIBLE else View.GONE
 
     /**
      * Giving up device ownership is the only way a normally installed copy can be
@@ -204,17 +237,35 @@ class MainActivity : Activity() {
         root.addView(text("LAN webcam service", 13f))
         root.addView(spacer())
 
+        // The only way to switch it off, and deliberately not in the web UI:
+        // a browser that could turn an unattended webcam off would need
+        // somebody to walk to the phone to turn it back on.
+        enabledSwitch = Switch(this).apply {
+            text = "Enabled"
+            isChecked = Prefs.enabled
+            setOnCheckedChangeListener { _, on -> setEnabledState(on) }
+        }
+        root.addView(enabledSwitch)
+        disabledHint = text("Off. Nothing runs, and it will not start with the phone.", 13f).apply {
+            visibility = View.GONE
+        }
+        root.addView(disabledHint)
+        root.addView(spacer())
+
         statusView = text("", 16f, bold = true)
         root.addView(statusView)
         root.addView(spacer())
 
-        root.addView(text("Connect at", 13f))
         urlView = text("", 18f).apply {
             setTextIsSelectable(true)
             typeface = Typeface.MONOSPACE
         }
-        root.addView(urlView)
-        root.addView(spacer())
+        connectBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(text("Connect at", 13f))
+            addView(urlView)
+        }
+        root.addView(connectBlock)
 
         credsView = text("", 15f).apply {
             setTextIsSelectable(true)
@@ -223,11 +274,11 @@ class MainActivity : Activity() {
         root.addView(credsView)
         root.addView(spacer())
 
-        val restart = Button(this).apply {
+        restartRow = Button(this).apply {
             text = "Restart service"
             setOnClickListener { CamService.start(this@MainActivity) }
         }
-        root.addView(restart)
+        root.addView(restartRow)
         root.addView(spacer())
 
         // Samsung and its friends suspend an app that is not exempt from
@@ -245,11 +296,15 @@ class MainActivity : Activity() {
         errorView = text("", 13f)
         root.addView(errorView)
 
-        if (fingerprint.isNotEmpty()) {
-            root.addView(spacer())
-            root.addView(text("TLS SHA-256 fingerprint", 13f))
-            root.addView(text(fingerprint, 12f).apply { typeface = Typeface.MONOSPACE })
+        fingerprintBlock = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(spacer())
+            if (fingerprint.isNotEmpty()) {
+                addView(text("TLS SHA-256 fingerprint", 13f))
+                addView(text(fingerprint, 12f).apply { typeface = Typeface.MONOSPACE })
+            }
         }
+        root.addView(fingerprintBlock)
 
         // Only shown while this app is the phone's device owner.
         ownerMsg = text("", 13f).apply { visibility = View.GONE }
