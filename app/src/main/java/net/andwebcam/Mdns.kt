@@ -41,9 +41,6 @@ class Mdns(
     private var receiver: Thread? = null
     private var announcer: Thread? = null
 
-    /** True while a socket is open and answering, so a caller can heal it. */
-    val alive: Boolean get() = running && socket != null
-
     fun start() {
         // One responder per instance: the service builds a new Mdns whenever it
         // has to re-announce, so there is never a stale thread to worry about.
@@ -89,14 +86,26 @@ class Mdns(
         startAnnouncer(nif)
 
         val buf = ByteArray(4096)
+        var errors = 0
         while (running) {
             val pkt = DatagramPacket(buf, buf.size)
             try {
                 socket?.receive(pkt)
+                errors = 0
             } catch (e: SocketTimeoutException) {
                 continue
             } catch (e: Exception) {
-                if (running) continue else break
+                if (!running) break
+                // A socket can outlive the interface as an open but dead
+                // socket: it never receives again, and nothing about it looks
+                // wrong. Give up after a few tries so the service rebuilds the
+                // responder instead of this thread spinning here for ever.
+                if (++errors >= 5) {
+                    Log.w(TAG, "receiver gave up: ${e.message}")
+                    break
+                }
+                try { Thread.sleep(200) } catch (_: InterruptedException) { break }
+                continue
             }
             if (!running) break
             try {
@@ -108,6 +117,13 @@ class Mdns(
                 Log.w(TAG, "query handling failed: ${e.message}")
             }
         }
+
+        // Leave nothing half-open: alive must go false so the next network
+        // event or maintenance run knows to build a fresh responder.
+        running = false
+        announcer?.interrupt()
+        try { socket?.close() } catch (_: Exception) {}
+        socket = null
     }
 
     private fun startAnnouncer(nif: NetworkInterface) {

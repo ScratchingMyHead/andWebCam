@@ -87,7 +87,7 @@ class CamService : Service(), HttpServer.Host {
             updateNotification()
         }
     }
-    private val refreshNet = Runnable { refreshNetwork(announce = true) }
+    private val refreshNet = Runnable { refreshNetwork() }
 
     override fun onCreate() {
         super.onCreate()
@@ -238,15 +238,16 @@ class CamService : Service(), HttpServer.Host {
         }
     }
 
-    private fun refreshNetwork(announce: Boolean) {
+    private fun refreshNetwork() {
         if (!started) return
         val ip = currentIp()
-        val changed = ip != State.ip
+        if (ip != State.ip) Log.i(TAG, "address is now ${ip ?: "none"}")
         State.ip = ip
-        if (changed) Log.i(TAG, "address is now ${ip ?: "none"}")
-        // A new address has to be announced at once, and a responder whose
-        // socket died with the interface has to be rebuilt.
-        if (announce && (changed || mdns?.alive != true)) restartMdns()
+        // Rebuild rather than patch up. A socket whose multicast membership died
+        // with the interface stays open and simply never receives again - the
+        // threads look perfectly healthy - so there is nothing to detect and
+        // nothing to repair in place. A fresh responder also re-announces.
+        restartMdns()
         updateNotification()
     }
 
@@ -311,7 +312,7 @@ class CamService : Service(), HttpServer.Host {
             Log.i(TAG, "no wifi connection; asking for one")
             askWifiToReconnect(wm)
         }
-        refreshNetwork(announce = true)
+        refreshNetwork()
     }
 
     @Suppress("DEPRECATION")
