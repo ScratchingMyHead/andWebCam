@@ -14,6 +14,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
+import android.util.Log
 import android.util.TypedValue
 import android.view.Gravity
 import android.view.View
@@ -147,8 +148,13 @@ class MainActivity : Activity() {
     /**
      * Switching off is the one action that cannot be undone from a browser, and
      * the one thing worth saying out loud is that it stays off after a restart.
+     *
+     * The switch goes straight back to on while the question is open: nothing
+     * has changed yet, and leaving it looking off lets the once-a-second repaint
+     * put it back underneath the dialog - which asks the question a second time.
      */
     private fun confirmDisable() {
+        showSwitch(true)
         AlertDialog.Builder(this)
             .setTitle("Turn off andWebCam?")
             .setMessage(
@@ -156,17 +162,17 @@ class MainActivity : Activity() {
                     "start when the phone is turned on again. Only this screen can " +
                     "turn it back on."
             )
-            .setNegativeButton("Cancel") { _, _ -> revertSwitch() }
+            .setNegativeButton("Cancel", null)
             .setPositiveButton("Turn off") { _, _ -> setEnabledState(false) }
-            .setOnCancelListener { revertSwitch() }
             .show()
     }
 
-    private fun revertSwitch() {
+    /** Move the switch without it being read as the user having moved it. */
+    private fun showSwitch(on: Boolean) {
+        if (enabledSwitch.isChecked == on) return
         revertingSwitch = true
-        enabledSwitch.isChecked = true
+        enabledSwitch.isChecked = on
         revertingSwitch = false
-        update()
     }
 
     /**
@@ -175,7 +181,9 @@ class MainActivity : Activity() {
      * switch turns it back on.
      */
     private fun setEnabledState(on: Boolean) {
+        Log.i("andWebCam", "service ${if (on) "enabled" else "disabled"} on the phone")
         Prefs.enabled = on
+        showSwitch(on)
         if (on) CamService.start(this) else CamService.stop(this)
         update()
     }
@@ -184,7 +192,7 @@ class MainActivity : Activity() {
         val name = "${Prefs.serviceName}.local"
         val url = "https://$name:${Prefs.port}/"
         val enabled = Prefs.enabled
-        if (enabledSwitch.isChecked != enabled) enabledSwitch.isChecked = enabled
+        showSwitch(enabled)
         statusView.text = when {
             !enabled -> "Disabled"
             !State.running -> "Stopped"

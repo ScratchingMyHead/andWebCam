@@ -49,7 +49,18 @@ class CamService : Service(), HttpServer.Host {
         private const val MAINTENANCE_MS = 5 * 60_000L
 
         fun start(ctx: Context) = send(ctx, ACTION_START)
-        fun stop(ctx: Context) = send(ctx, ACTION_STOP)
+
+        fun stop(ctx: Context) {
+            // stopService() when there is nothing to tear down. Sending ACTION_STOP
+            // would ask the system to start the service for it, and a service that
+            // is only being stopped never calls startForeground(), which Android
+            // treats as a fatal error.
+            if (State.running) {
+                send(ctx, ACTION_STOP)
+            } else {
+                ctx.stopService(Intent(ctx, CamService::class.java))
+            }
+        }
 
         /** Re-open the camera (e.g. after the permission is granted). */
         fun reload(ctx: Context) = send(ctx, ACTION_RELOAD)
@@ -116,6 +127,10 @@ class CamService : Service(), HttpServer.Host {
         if (intent?.action != ACTION_STOP && disabledNow()) return START_NOT_STICKY
         when (intent?.action) {
             ACTION_STOP -> {
+                // Only reached when the system started the service to deliver
+                // this call: the startForegroundService() contract has to be
+                // honoured even though it is about to go away.
+                if (!started) startForegroundCompat()
                 stopEverything()
                 stopSelf()
                 return START_NOT_STICKY
