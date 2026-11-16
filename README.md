@@ -2,38 +2,17 @@
 
 A headless-first LAN webcam for Android. The phone captures its camera,
 serves it over HTTPS as an MJPEG stream with a control web page, and
-advertises itself over mDNS/DNS-SD so the desktop can find it and resolve
-`andwebcam.local` without any manual configuration.
+advertises itself over mDNS/DNS-SD so other machines can find it without
+any manual configuration.
 
 Designed for a phone that you don't have physical access to: it runs as a
 foreground service, starts at boot, and is configured via the web UI.
 
-## What runs where
-
-```
-  phone                                        desktop
-  -----                                        -------
-  camera2  --JPEG-->  StreamHub  -->  HTTPS server (8443)
-                                          |  /            control page
-                                          |  /video       MJPEG stream
-                                          |  /api/...     status + settings
-                                          |  /cert        server certificate
-  mDNS responder  --announce-->  224.0.0.251:5353
-                                          |
-                              avahi-resolve andwebcam.local -> <ip>
-```
-
 ## Download
 
-APKs for every version: [github.com/ScratchingMyHead/andWebCam/releases](https://github.com/ScratchingMyHead/andWebCam/releases).
+APKs are at [github.com/ScratchingMyHead/andWebCam/releases](https://github.com/ScratchingMyHead/andWebCam/releases).
 
-## Installing
-
-Copy the APK to the phone and tap it (or open it from a file manager). Android
-asks once for permission to install apps from that source; allow it, install,
-then open **andWebCam**.
-
-On first launch the app requests everything it needs, as normal system dialogs:
+## Permissions
 
 * **Camera** — required; the stream cannot start without it.
 * **Notifications** (Android 13+) — the service runs as a foreground service and
@@ -42,60 +21,20 @@ On first launch the app requests everything it needs, as normal system dialogs:
   off instead of being dozed, and the phone stays on Wi-Fi. If that dialog was
   skipped, the app's screen offers it again; without it the phone can drop off
   the network while asleep.
-
-Accept all three. Everything else — camera, resolution, frame rate, quality,
-zoom, orientation, torch, port, service name, automatic start — is configured
-from the web page at the address shown on the phone screen. No PC, cable or
-developer tools are needed to install or configure it.
-
-To uninstall, remove the app the usual way. The one exception is a phone where
-it was made **device owner** (see [Restarting the phone](#restarting-the-phone)):
-Android then refuses to uninstall it until ownership is given up, which is done
-with the **Remove ownership** button at the bottom of the phone's own screen.
+* **Device owner** is only required to allow the app to restart the phone.
 
 ## Restarting the phone
 
-The web UI has a **Restart phone** button. Android gives ordinary apps no way to
-reboot the device, so the button only works when andWebCam is the phone's
-**device owner** — a management role that Android grants only through device
-provisioning (a device management service, or the command below). On a normal
-install the button therefore reports that the phone is not managed, and you
-restart it with the power button instead. Nothing else in the app depends on it.
-
-To enable it, install andWebCam, enable developer tools, turn on USB debugging, then
-run this once, from a machine with a USB cable (the phone must have no accounts, and
-this is the only step that needs `adb` and is only required if you want reboot
-functionality):
+The web UI has an optional **Restart phone** button. If you really need this
+capability **device owner** must be granted via adb:
 
 ```
 adb shell dpm set-device-owner net.andwebcam/.AdminReceiver
 ```
 
-Once that succeeds the phone screen shows **Remove ownership** next to the words
-*disables restart and allows uninstall*. That button hands the role back, after
-which the app can be uninstalled normally — so no further `adb` commands are
-needed to get rid of it.
-
 ## Using it
 
-Open `https://andwebcam.local:8443/` (or the IP shown on the phone).
-
-### Streaming, idle and power
-
-* **Start / Stop streaming** buttons turn the stream on and off. While stopped,
-  `/video` answers 503 and viewers are disconnected.
-* **Start streaming when the service starts** (default on) decides whether
-  streaming is enabled after a boot or service restart. It is a stored
-  preference; toggling it does not stop a stream that is already running.
-* The camera itself is **only open while somebody is watching**. When the last
-  viewer leaves, the camera is closed after a few seconds, so an unused phone
-  does not wear out its camera or battery. The next viewer opens it again.
-* The phone screen shows whether the service is running, streaming or idle, and
-  its **Enabled** switch is the only way to stop the service itself: off means
-  stopped now, no notification, no start with the phone, and nothing but that
-  switch brings it back. It is not in the web UI on purpose — a browser that
-  could switch an unattended webcam off would need a walk to the phone to
-  switch it on again.
+Open `https://andwebcam.local:8443/` (or the host/IP shown on the phone).
 
 ### Authentication
 
@@ -103,122 +42,52 @@ Open `https://andwebcam.local:8443/` (or the IP shown on the phone).
   screen** together with the address. Log in as `admin` with that password.
 * Once you change the password in the web UI it is stored as a PBKDF2 hash and
   the phone **stops displaying it**.
-* Anonymous **view-only** access (stream + status, no controls) is available as
-  an option and is **off by default**.
-* Both a session cookie (the web UI) and HTTP Basic (ffmpeg/curl) are accepted.
-* **Log out** ends the session in that browser. It also refuses the browser's
-  saved HTTP Basic password until you log in through the form again, so a
-  browser that had remembered the password cannot sign itself back in.
 
-### API
 
-| Method | Path             | Auth            | Purpose                          |
-|--------|------------------|-----------------|----------------------------------|
-| GET    | `/`              | none            | control page (a shell until you log in) |
-| GET    | `/video`         | view            | MJPEG stream                     |
-| GET    | `/snapshot`      | view            | one JPEG, current settings       |
-| GET    | `/api/status`    | view            | JSON status + capabilities       |
-| POST   | `/api/settings`  | admin           | change any setting               |
-| POST   | `/api/password`  | admin           | change the admin password        |
-| POST   | `/api/login`     | none            | get a session cookie             |
-| POST   | `/api/logout`    | none            | drop the session                 |
-| POST   | `/api/reboot`    | admin           | restart the phone (device owner) |
-| GET    | `/cert`          | none            | download the server certificate  |
+## Consuming it on a PC
 
-Settings that can be changed via `/api/settings`:
-
-`facing` (back/front), `resolution` (WxH), `fps`, `quality` (JPEG 10-100),
-`torch` (bool), `zoom` (1..max), `orientation` (0/90/180/270), `anonView`
-(bool), `autoStartStreaming` (bool), `streaming` (bool), `serviceName`, `port`.
-
-`streaming` takes effect immediately (it is not a stored preference; use
-`autoStartStreaming` for that). Changing `resolution`, `facing`, `serviceName`
-or `port` rebuilds the capture session or restarts the server.
-
-## Consuming it on the desktop
-
-Fetch the certificate from the phone once:
+`/video` needs the login unless anonymous view-only access is on, so the
+credentials go in the URL. The certificate is self-signed, so fetch it from the
+phone:
 
 ```
 curl -sk https://andwebcam.local:8443/cert -o andwebcam.pem
 ```
 
-It belongs to that install alone (see the notes below), so do not reuse one
-fetched elsewhere; `openssl x509 -in andwebcam.pem -noout -fingerprint -sha256`
-should match the fingerprint on the app's screen. A browser has no authority to
-check a self-signed certificate against, so it will warn and offer an exception
-(Firefox: **Advanced** → **Accept the Risk and Continue**), which it then
-remembers.
-
 Then, for example, into a virtual webcam:
 
 ```
 sudo modprobe v4l2loopback video_nr=10 card_label=andWebCam exclusive_caps=1
-ffmpeg -i https://andwebcam.local:8443/video -c:v rawvideo -pix_fmt yuv420p -f v4l2 /dev/video10
+ffmpeg -ca_file andwebcam.pem -tls_verify 1 \
+       -i https://admin:PASSWORD@andwebcam.local:8443/video \
+       -c:v rawvideo -pix_fmt yuv420p -f v4l2 /dev/video10
 ```
-
-(`-ca_file andwebcam.pem` in place of `-k` once you trust the cert.)
 
 A long-lived stream is safer with ffmpeg's reconnect options, which survive a
 Wi-Fi blip instead of exiting:
 
 ```
 ffmpeg -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
-       -i "https://admin:PASSWORD@andwebcam.local:8443/video" ...
+       -ca_file andwebcam.pem -tls_verify 1 \
+       -i https://admin:PASSWORD@andwebcam.local:8443/video ...
 ```
+
+Both options have to come before `-i`; without them ffmpeg does not check the
+certificate at all.
 
 ## Notes / quirks
 
 * The TLS key and certificate are generated on the phone the first time the
-  service starts and kept in the app's private files, so every install has its
-  own identity and no key material is in the APK or the repository. The
-  certificate is self-signed and `CA:FALSE`: browsers have no authority to
-  check it against, so they warn, and the only proof that you are talking to
-  this phone is the SHA-256 fingerprint on the app's screen matching the one
-  the browser shows. It is regenerated if the hostname changes or after ten
-  years.
+  service starts and kept in the app's private files. The certificate is
+  self-signed and `CA:FALSE`: browsers have no authority to check it against,
+  so they warn, and the only proof that you are talking to this phone is the
+  SHA-256 fingerprint on the app's screen matching the one the browser shows.
+  It is regenerated if the hostname changes or after ten years.
 * Orientation is applied as the JPEG's EXIF orientation, which browsers and
   ffmpeg honour without any transcoding cost on the phone.
 * While somebody is watching, the service holds a partial wake lock so the CPU
   stays up for a full-rate stream. The Wi-Fi lock is held for as long as the
-  service runs, because it is the radio that has to notice the access point
-  disappearing: with it asleep the phone stayed off the network until the
-  screen was turned on. With no viewers the CPU sleeps again, and every few
+  service runs. With no viewers the CPU sleeps again, and every few
   minutes a maintenance alarm wakes it briefly to ask Wi-Fi to reassociate and
-  to correct the address if it changed. Exempt the app from battery
-  optimisation (the phone offers it) or the system will suspend it anyway.
-* The address is read from the network, not remembered: when it changes, the
-  page, the notification and the mDNS announcement follow it, so
-  `andwebcam.local` keeps resolving to the phone.
-* A viewer connection can be reset by the network; the hub drops the client
-  after three failed writes, the camera closes a few seconds later, and the web
-  page or ffmpeg reconnect wakes it up again.
-
-## Developer notes
-
-Building from source:
-
-```
-./gradlew assembleDebug
-```
-
-The TLS identity is not built in: it is created on the device at first run
-(`Tls.kt`), so there is nothing to regenerate before a build. Clearing the
-app's data, or reinstalling it, gives the phone a new key and certificate, and
-any browser exception or saved certificate for it has to be made again.
-
-Installing straight to a phone on USB (equivalent to tapping the APK, but also
-grants the camera permission up front, which is handy for an unattended phone):
-
-```
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-adb shell pm grant net.andwebcam android.permission.CAMERA
-```
-
-Making the app device owner so the web UI can restart the phone is the
-`dpm set-device-owner` command under
-[Restarting the phone](#restarting-the-phone). To undo it on a normally
-installed copy use the phone's **Remove ownership** button;
-`dpm remove-active-admin` refuses with *"Attempt to remove non-test admin"*
-unless the app was installed as test-only (`adb install -t`).
+  to correct the address if it changed.
 
