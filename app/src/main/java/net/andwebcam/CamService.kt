@@ -22,6 +22,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.PowerManager
 import android.util.Log
+import java.io.File
 import java.net.Inet4Address
 import java.net.NetworkInterface
 import java.util.concurrent.Executors
@@ -213,7 +214,25 @@ class CamService : Service(), HttpServer.Host {
         started = true
         State.running = true
         updateNotification()
+        // One line per boot that says which build is running, where to find it,
+        // and whether the run before it ended on purpose: with a camera at a
+        // remote site that is the first thing to ask.
+        val previous = Prefs.lastStart
+        val clean = Prefs.cleanExit
+        Prefs.lastStart = System.currentTimeMillis()
+        Prefs.cleanExit = false
+        Log.i(
+            TAG,
+            "service started: ${BuildConfig.VERSION_NAME} (${BuildConfig.BUILD_ID}) on " +
+                "port ${Prefs.port}, https://${Prefs.serviceName}.local:${Prefs.port}/, " +
+                "ip ${State.ip ?: "none"}, streaming on start=$streamingEnabled" +
+                if (previous == 0L) "" else ", previous run " + ago(previous) +
+                    (if (clean) " ended cleanly" else " ended unexpectedly"),
+        )
     }
+
+    private fun ago(ms: Long): String =
+        java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 
     private fun startNetworking() {
         State.port = Prefs.port
@@ -410,6 +429,7 @@ class CamService : Service(), HttpServer.Host {
     private fun stopEverything() {
         State.running = false
         started = false
+        Prefs.cleanExit = true
         mainHandler.removeCallbacks(cameraRetry)
         mainHandler.removeCallbacks(idleStop)
         mainHandler.removeCallbacks(refreshNet)
@@ -459,6 +479,7 @@ class CamService : Service(), HttpServer.Host {
             // Restarting needs device owner; the page hides the button without it.
             "canReboot" to (getSystemService(DevicePolicyManager::class.java)
                 ?.isDeviceOwnerApp(packageName) == true),
+            "updateNote" to Prefs.updateNote,
         )
     }
 
@@ -546,12 +567,50 @@ class CamService : Service(), HttpServer.Host {
         return report
     }
 
+    // ---- software update ----------------------------------------------
+
+    /** The session created by [stageUpdate], waiting to be committed. */
+    private var staged: Updater.Staged? = null
+
+    override fun stageUpdate(apk: File): String? {
+        staged?.discard()
+        staged = null
+        return try {
+            staged = Updater.stage(this, apk)
+            null
+        } catch (e: Updater.Bad) {
+            e.reason
+        } catch (e: Exception) {
+            "Could not prepare the update: ${e.message}"
+        }
+    }
+
+    override fun commitUpdate(): String? {
+        val s = staged ?: return "nothing was staged"
+        staged = null
+        // Replacing this APK kills this process, service and all. The
+        // maintenance alarm is what normally brings the service back; arm it
+        // once, soon, so an update does not leave the phone dark for minutes.
+        try {
+            getSystemService(AlarmManager::class.java)
+                ?.set(AlarmManager.RTC_WAKEUP, System.currentTimeMillis() + 30_000, maintenanceIntent())
+        } catch (e: Exception) {
+            Log.w(TAG, "cannot arm the restart after the update: ${e.message}")
+        }
+        val err = s.commit(this)
+        Prefs.cleanExit = true       // the process is about to be replaced on purpose
+        Prefs.updateNote = if (err == null) "Installing ${s.label}..." else "Update failed: $err"
+        return err
+    }
+
     override fun reboot(): String? {
         val dpm = getSystemService(DevicePolicyManager::class.java)
         val admin = ComponentName(this, AdminReceiver::class.java)
         if (!dpm.isDeviceOwnerApp(packageName)) {
             return "This phone is not managed by andWebCam, so it cannot be restarted from here. Use its power button."
         }
+        // Deliberate, so the next start does not report it as a disappearance.
+        Prefs.cleanExit = true
         Thread {
             try {
                 Thread.sleep(800)
@@ -562,7 +621,28 @@ class CamService : Service(), HttpServer.Host {
         return null
     }
 
-    // ---- locks / notification -----------------------------------------
+    // ---- screen on / black overlay --------------------------------------
+
+    /**
+     * Turn the display on by bringing up the black overlay activity, which
+     * uses FLAG_TURN_SCREEN_ON. The overlay keeps the screen on and dismisses
+     * on a tap, revealing whatever is behind it.
+     */
+    override fun wakeScreen() {
+        Log.i(TAG, "wake screen requested from web UI")
+        try {
+            val i = Intent(this, BlackScreenActivity::class.java).apply {
+                addFlags(
+                    Intent.FLAG_ACTIVITY_NEW_TASK or
+                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                        Intent.FLAG_ACTIVITY_SINGLE_TOP
+                )
+            }
+            startActivity(i)
+        } catch (e: Exception) {
+            Log.w(TAG, "cannot wake screen: ${e.message}")
+        }
+    }
 
     /**
      * The radio is kept out of power save for as long as the service runs, not

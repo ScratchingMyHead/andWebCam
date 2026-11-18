@@ -21,7 +21,8 @@ APKs are at [github.com/ScratchingMyHead/andWebCam/releases](https://github.com/
   off instead of being dozed, and the phone stays on Wi-Fi. If that dialog was
   skipped, the app's screen offers it again; without it the phone can drop off
   the network while asleep.
-* **Device owner** is only required to allow the app to restart the phone.
+* **Device owner** — lets the web UI restart the phone, and lets an update install
+  without a tap on the phone's screen.
 
 ## Restarting the phone
 
@@ -43,6 +44,47 @@ Open `https://andwebcam.local:8443/` (or the host/IP shown on the phone).
 * Once you change the password in the web UI it is stored as a PBKDF2 hash and
   the phone **stops displaying it**.
 
+
+## Updating the app
+
+The bottom of the settings pane has **Update software**: pick an APK and it is
+installed on the phone, so a new build can be shipped without adb or a cable.
+The page reloads itself when the new version answers, usually within a minute.
+
+The same thing from a script:
+
+```
+curl -k -u admin:PASSWORD --data-binary @andWebCam.apk \
+     https://andwebcam.local:8443/api/update
+```
+
+The upload starts immediately; the answer says whether the APK was accepted,
+not whether the install finished. The result is shown at the bottom of the
+settings pane afterwards (`updateNote` in `/api/status`).
+
+The APK has to be andWebCam, signed with the same key as the installed copy,
+and not older, or it is refused with the reason. With device owner the install
+happens silently; without it Android puts its normal install dialog on the
+phone's screen and somebody has to tap it.
+
+The install replaces the app that is serving the page, so expect the address
+to stop answering for about half a minute before the new version comes back.
+
+## Reading the log
+
+Everything the app has written since the phone last booted, without adb:
+
+```
+curl -k -u admin:PASSWORD 'https://andwebcam.local:8443/api/log?lines=500'
+```
+
+`?all=1` adds the framework's own chatter about the process. The **Download the
+log** link at the bottom of the settings pane does the same thing in a browser.
+
+An app may read its own log entries and nobody else's, which covers this app's
+messages, its crash traces and the system's record of it being started or
+killed. That works the same on a release build, so a remote phone can explain
+itself without a debug build or a cable.
 
 ## Consuming it on a PC
 

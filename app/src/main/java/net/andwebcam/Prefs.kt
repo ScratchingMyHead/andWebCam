@@ -31,6 +31,9 @@ object Prefs {
     private const val KEY_AUTO_START_STREAM = "auto_start_stream"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BATTERY_ASKED = "battery_asked"
+    private const val KEY_UPDATE_NOTE = "update_note"
+    private const val KEY_LAST_START = "last_start"
+    private const val KEY_CLEAN_EXIT = "clean_exit"
 
     private const val KEY_ADMIN_USER = "admin_user"
     private const val KEY_PASS_PLAIN = "pass_plain"
@@ -124,6 +127,29 @@ object Prefs {
     var enabled: Boolean
         get() = sp.getBoolean(KEY_ENABLED, true)
         set(v) = edit { putBoolean(KEY_ENABLED, v) }
+
+    /**
+     * The outcome of the last software update, kept across the restart that a
+     * successful one causes so the page can say what happened.
+     */
+    var updateNote: String
+        get() = sp.getString(KEY_UPDATE_NOTE, "")!!
+        set(v) = edit { putString(KEY_UPDATE_NOTE, v.take(300)) }
+
+    /**
+     * When the service last started, and whether the run before it ended on
+     * purpose. A phone that restarts itself at 3am leaves no other trace that
+     * the page can see, so the next start reports it.
+     */
+    var lastStart: Long
+        get() = sp.getLong(KEY_LAST_START, 0L)
+        set(v) { sp.edit().putLong(KEY_LAST_START, v).commit() }
+
+    var cleanExit: Boolean
+        get() = sp.getBoolean(KEY_CLEAN_EXIT, true)
+        // commit(), not apply(): the process is about to end either way and the
+        // background write may never reach the disk.
+        set(v) { sp.edit().putBoolean(KEY_CLEAN_EXIT, v).commit() }
 
     /** True once the battery-optimisation exemption dialog has been shown. */
     var batteryPromptAsked: Boolean

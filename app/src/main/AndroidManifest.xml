@@ -35,6 +35,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Full-screen black overlay that keeps the display on while idle.
+             Started by the service with FLAG_ACTIVITY_NEW_TASK. -->
+        <activity
+            android:name=".BlackScreenActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
+
         <service
             android:name=".CamService"
             android:exported="false"
@@ -61,5 +68,11 @@
                 <action android:name="android.intent.action.QUICKBOOT_POWERON" />
             </intent-filter>
         </receiver>
+
+        <!-- Result of an install started from the web page. The pending intent
+             is addressed to us, so nothing else can send it. -->
+        <receiver
+            android:name=".UpdateReceiver"
+            android:exported="false" />
     </application>
 </manifest>

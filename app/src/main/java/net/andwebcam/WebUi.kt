@@ -69,6 +69,7 @@ object WebUi {
  .badge.locked { background:#7a2f2f }
  .err { color:#f66; font-size:12px; min-height:1.2em; margin:6px 0 0 }
  .hint { color:#888; font-size:12px; margin:6px 0 0 }
+ .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
  .check { display:flex; align-items:center; gap:8px; font-size:13px; color:#bbb }
 </style>
@@ -175,6 +176,18 @@ object WebUi {
       </div>
       <button id="pwset">Change password</button>
       <p class="hint" id="pwmsg">Once changed, the phone screen stops displaying the password.</p>
+
+      <h2>Software</h2>
+      <div class="row">
+        <label for="apk">Update from an APK file</label>
+        <input id="apk" type="file" accept=".apk,application/vnd.android.package-archive">
+      </div>
+      <button id="doUpdate">Update software</button>
+      <p class="hint" id="updmsg">Installs without a cable. The page reloads by itself when the phone comes back.</p>
+      <p class="hint"><a href="/api/log?lines=2000" target="_blank" rel="noopener">Download the log</a>
+        &mdash; everything the app has written since the phone last booted.</p>
+      <button id="doWake">Wake screen</button>
+      <p class="hint" id="wakemsg">Brings the display on so a VNC viewer can connect.</p>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
@@ -477,6 +490,9 @@ function refresh() {
     // Restarting needs device owner; without it there is nothing the button
     // could do, so it is not offered.
     el('reboot').classList.toggle('hidden', !s.canReboot);
+    // What came of the last update; the note is kept across the restart a
+    // successful one causes, so the answer is still there afterwards.
+    if (!updateBusy && s.updateNote) { updateMsg(s.updateNote); }
     if (el('s_res').options.length !== (s.resolutions || []).length) {
       el('s_res').innerHTML = '';
       (s.resolutions || []).forEach(function(x) { var o = document.createElement('option'); o.value = x; o.textContent = x; el('s_res').appendChild(o); });
@@ -631,6 +647,76 @@ el('pwset').onclick = function() {
     el('p_new').value = '';
     setTimeout(refresh, 300);
   });
+};
+// Software update. The APK is sent as the raw body of POST /api/update, which
+// is also how to do it from a script (curl --data-binary @app.apk).
+// The install replaces this app, so the phone stops answering for a few
+// seconds; the page waits for the build id to change and then reloads itself.
+var updateBusy = false;
+function updateMsg(t) { el('updmsg').textContent = t; }
+el('apk').onchange = function() {
+  if (!updateBusy && this.files.length) { updateMsg(this.files[0].name); }
+};
+el('doUpdate').onclick = function() {
+  if (updateBusy) { return; }
+  var f = el('apk').files[0];
+  if (!f) { updateMsg('Choose an APK file first.'); return; }
+  if (!/\.apk$/i.test(f.name) && f.type !== 'application/vnd.android.package-archive') {
+    if (!confirm('"' + f.name + '" does not look like an APK. Send it anyway?')) { return; }
+  }
+  if (!confirm('Install ' + f.name + ' on the phone?')) { return; }
+  var b = el('doUpdate');
+  var before = ((window.S && window.S.build) || '') + '|' + ((window.S && window.S.version) || '');
+  updateBusy = true;
+  b.disabled = true;
+  b.textContent = 'Uploading...';
+  updateMsg('Uploading ' + f.name + ' (' + Math.round(f.size / 1024) + ' kB)...');
+  fetch('/api/update', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/vnd.android.package-archive' },
+    body: f
+  }).then(function(r) { return r.json().catch(function() { return {}; }); })
+    .then(function(r) {
+      if (!r.ok) {
+        updateBusy = false; b.disabled = false; b.textContent = 'Update software';
+        updateMsg(r.error || 'The update was refused.');
+        return;
+      }
+      b.textContent = 'Installing...';
+      updateMsg(r.message || 'Installing...');
+      var tries = 0;
+      var went = false;   // the phone stopped answering: it is being replaced
+      var t = setInterval(function() {
+        tries++;
+        fetch('/api/status').then(function(x) { return x.json(); }).then(function(s) {
+          var now = (s.build || '') + '|' + (s.version || '');
+          // The app is back: it has been replaced, whether or not the build
+          // id changed (rebuilding the same commit does not change it).
+          if (s.build && (now !== before || went)) { clearInterval(t); location.reload(); }
+          went = false;
+        }).catch(function() { went = true; });
+        if (tries > 60) {
+          clearInterval(t);
+          updateBusy = false; b.disabled = false; b.textContent = 'Update software';
+          updateMsg('No answer from the phone. Reload the page to see how it went.');
+          setTimeout(refresh, 500);
+        }
+      }, 3000);
+    })
+    .catch(function() {
+      updateBusy = false; b.disabled = false; b.textContent = 'Update software';
+      updateMsg('The upload did not finish. Check that the phone is still reachable.');
+    });
+};
+// Wake screen. Turns the display on so a VNC viewer can connect; the phone
+// shows a full-screen black form which the user taps away.
+el('doWake').onclick = function() {
+  fetch('/api/wake', { method: 'POST' }).then(function(r) { return r.json(); })
+    .then(function(r) {
+      if (r.ok) { updateMsg('Screen waking up.'); }
+      else { updateMsg('Could not wake screen: ' + (r.error || 'unknown error')); }
+    })
+    .catch(function() { updateMsg('No answer from the phone.'); });
 };
 // The settings pane can be hidden so the video fills the window; the choice is remembered.
 function panePref(v) {

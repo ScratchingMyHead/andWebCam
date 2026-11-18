@@ -5,6 +5,8 @@ import android.util.Base64
 import android.util.Log
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
+import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.net.InetSocketAddress
 import java.net.Socket
@@ -42,6 +44,22 @@ class HttpServer(
         /** Returns null on success, or an error message. */
         fun reboot(): String?
 
+        /** Turn the display on (e.g. so a VNC viewer can connect). */
+        fun wakeScreen()
+
+        /**
+         * Validates an uploaded APK and copies it into an install session.
+         * Returns null when it is staged and ready to commit, or a sentence
+         * explaining why it was refused.
+         */
+        fun stageUpdate(apk: File): String?
+
+        /**
+         * Commits the staged APK. On success this process is replaced, so the
+         * call does not return; an error is returned as a message.
+         */
+        fun commitUpdate(): String?
+
         /**
          * Runs the camera with no processing and no streaming and reports the raw
          * output rate. Diagnostic only; never surfaced in the page.
@@ -72,6 +90,15 @@ class HttpServer(
      */
     private val basicOk = ConcurrentHashMap<String, Long>()
     private val basicMax = 32
+
+    /** Rate limit for "request failed" lines; see [logFailure]. */
+    private val failureGate = Any()
+    private var failureWindow = 0L
+    private var failureCount = 0
+    private var failureSkipped = 0
+
+    /** Room to spare over the current APK; a 200 MB upload is not an update. */
+    private val MAX_UPDATE_BYTES = 64L * 1024 * 1024
 
     @Volatile private var socket: SSLServerSocket? = null
     @Volatile private var running = false
@@ -123,7 +150,7 @@ class HttpServer(
                     try { c.soTimeout = 15000 } catch (_: Exception) {}
                     handle(c)
                 } catch (e: Exception) {
-                    Log.w("andWebCam", "request from $from failed: ${e.message}")
+                    logFailure(from, e)
                 } finally {
                     val ms = System.currentTimeMillis() - started
                     if (ms > 5000) Log.w("andWebCam", "slow request from $from: ${ms}ms")
@@ -131,6 +158,31 @@ class HttpServer(
                 }
             }
         }
+    }
+
+    /**
+     * A client that cannot complete the handshake - a browser sitting on the
+     * certificate warning retries every couple of seconds - would otherwise
+     * fill the log with two lines per attempt and bury everything else. Five a
+     * minute is plenty to see that it is happening.
+     */
+    private fun logFailure(from: String, e: Exception) {
+        val now = System.currentTimeMillis()
+        synchronized(failureGate) {
+            if (now - failureWindow > 60_000) {
+                if (failureSkipped > 0) {
+                    Log.w("andWebCam", "$failureSkipped further failed requests were not logged")
+                }
+                failureWindow = now
+                failureSkipped = 0
+                failureCount = 0
+            }
+            if (++failureCount > 5) {
+                failureSkipped++
+                return
+            }
+        }
+        Log.w("andWebCam", "request from $from failed: ${e.message}")
     }
 
     private fun handle(sock: Socket) {
@@ -143,6 +195,7 @@ class HttpServer(
         val method = parts[0].uppercase()
         val target = parts[1]
         val path = target.substringBefore('?')
+        val query = target.substringAfter('?', "")
 
         val headers = HashMap<String, String>()
         while (true) {
@@ -150,6 +203,17 @@ class HttpServer(
             if (line.isEmpty()) break
             val i = line.indexOf(':')
             if (i > 0) headers[line.substring(0, i).trim().lowercase()] = line.substring(i + 1).trim()
+        }
+
+        val who = authWho(headers)
+        val role = who.role
+
+        // An APK is far larger than any JSON body and must not be held in
+        // memory, so this one route reads its own body, before the generic
+        // read below has consumed it.
+        if (method == "POST" && path == "/api/update") {
+            handleUpdate(input, output, headers, role)
+            return
         }
 
         var body = ByteArray(0)
@@ -162,9 +226,6 @@ class HttpServer(
         // The request has been read; from here on a blocked write is normal
         // (a viewer that reads slowly) so the socket timeout goes away.
         try { sock.soTimeout = 0 } catch (_: Exception) {}
-
-        val who = authWho(headers)
-        val role = who.role
 
         when {
             method == "GET" && path == "/cert" -> {
@@ -270,6 +331,32 @@ class HttpServer(
                     } else {
                         respond(output, 200, "application/json", jsonBytes(mapOf("ok" to false, "error" to err)))
                     }
+                }
+            }
+
+            method == "POST" && path == "/api/wake" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    try {
+                        host.wakeScreen()
+                        respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                    } catch (e: Exception) {
+                        respond(
+                            output, 200, "application/json",
+                            jsonBytes(mapOf("ok" to false, "error" to e.message)),
+                        )
+                    }
+                }
+            }
+
+            method == "GET" && path == "/api/log" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val n = queryParam(query, "lines")?.toIntOrNull()?.coerceIn(10, 10_000) ?: 500
+                    val all = queryParam(query, "all") in listOf("1", "true", "yes")
+                    val text = Logs.dump(n, all)
+                    respond(
+                        output, 200, "text/plain; charset=utf-8", text.toByteArray(),
+                        listOf("Content-Disposition: inline; filename=\"andwebcam-log.txt\""),
+                    )
                 }
             }
 
@@ -387,6 +474,17 @@ class HttpServer(
 
     private fun hasCookie(cookie: String?, name: String): Boolean = cookieValue(cookie, name) != null
 
+    private fun queryParam(query: String, name: String): String? {
+        if (query.isEmpty()) return null
+        for (part in query.split('&')) {
+            val kv = part.split('=', limit = 2)
+            if (kv[0] == name) {
+                return if (kv.size > 1) java.net.URLDecoder.decode(kv[1], "UTF-8") else ""
+            }
+        }
+        return null
+    }
+
     private fun snapshotName(): String =
         "andWebCam-" +
             java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
@@ -403,6 +501,108 @@ class HttpServer(
             output, 401, "text/plain", "authentication required".toByteArray(),
             listOf("WWW-Authenticate: Basic realm=\"andWebCam\"")
         )
+    }
+
+    // ---- software update ----------------------------------------------
+
+    /**
+     * POST /api/update with the APK as the raw request body.
+     *
+     * The body is written straight to a file rather than to memory: an APK is
+     * a few megabytes and the generic path above only accepts small JSON.
+     * Content-Length is required, which is what curl and the page's fetch()
+     * both send.
+     */
+    private fun handleUpdate(
+        input: InputStream,
+        output: BufferedOutputStream,
+        headers: Map<String, String>,
+        role: Role,
+    ) {
+        if (role != Role.ADMIN) {
+            unauthorized(output)
+            return
+        }
+        val length = headers["content-length"]?.toLongOrNull() ?: -1L
+        if (length <= 0) {
+            respond(
+                output, 411, "application/json",
+                jsonBytes(
+                    mapOf(
+                        "ok" to false,
+                        "error" to "Content-Length is required: send the APK as the request body.",
+                    )
+                )
+            )
+            return
+        }
+        if (length > MAX_UPDATE_BYTES) {
+            respond(
+                output, 413, "application/json",
+                jsonBytes(
+                    mapOf(
+                        "ok" to false,
+                        "error" to "The upload is larger than ${MAX_UPDATE_BYTES / (1024 * 1024)} MB.",
+                    )
+                )
+            )
+            return
+        }
+
+        val apk = try {
+            File.createTempFile("update", ".apk", ctx.cacheDir)
+        } catch (e: Exception) {
+            respond(
+                output, 500, "application/json",
+                jsonBytes(mapOf("ok" to false, "error" to "No room to store the upload: ${e.message}"))
+            )
+            return
+        }
+        try {
+            FileOutputStream(apk).use { out ->
+                val buf = ByteArray(64 * 1024)
+                var left = length
+                while (left > 0) {
+                    val n = input.read(buf, 0, minOf(buf.size.toLong(), left).toInt())
+                    if (n <= 0) throw java.io.IOException("the upload ended after ${length - left} bytes")
+                    out.write(buf, 0, n)
+                    left -= n
+                }
+            }
+            val err = host.stageUpdate(apk)
+            apk.delete()
+            if (err != null) {
+                respond(output, 200, "application/json", jsonBytes(mapOf("ok" to false, "error" to err)))
+                return
+            }
+        } catch (e: Exception) {
+            apk.delete()
+            respond(
+                output, 200, "application/json",
+                jsonBytes(mapOf("ok" to false, "error" to "Upload failed: ${e.message}"))
+            )
+            return
+        }
+
+        Prefs.updateNote = "Installing..."
+        respond(
+            output, 200, "application/json",
+            jsonBytes(
+                mapOf(
+                    "ok" to true,
+                    "message" to "Installing. The phone restarts the app when it is done, " +
+                        "so this page may stop answering for a moment.",
+                )
+            )
+        )
+        // Committing replaces this very APK, which kills this process. Let the
+        // answer above leave the phone first, or the browser shows a failure
+        // for an update that worked.
+        Thread {
+            try { Thread.sleep(1500) } catch (_: InterruptedException) {}
+            val err = host.commitUpdate()
+            if (err != null) Prefs.updateNote = "Update failed: $err"
+        }.apply { isDaemon = true }.start()
     }
 
     // ---- io helpers ---------------------------------------------------
@@ -443,6 +643,7 @@ class HttpServer(
         val reason = when (code) {
             200 -> "OK"; 204 -> "No Content"; 401 -> "Unauthorized"
             403 -> "Forbidden"; 404 -> "Not Found"; 500 -> "Internal Server Error"
+            411 -> "Length Required"; 413 -> "Payload Too Large"
             503 -> "Service Unavailable"
             else -> "OK"
         }
