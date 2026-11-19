@@ -220,7 +220,8 @@ class HttpServer(
             if (i > 0) headers[line.substring(0, i).trim().lowercase()] = line.substring(i + 1).trim()
         }
 
-        val who = authWho(headers)
+        val from = try { sock.inetAddress?.hostAddress ?: "" } catch (_: Exception) { "" }
+        val who = authWho(headers, from)
         val role = who.role
 
         // An APK is far larger than any JSON body and must not be held in
@@ -252,10 +253,26 @@ class HttpServer(
             }
 
             method == "POST" && path == "/api/login" -> {
+                val wait = loginWait(from)
+                if (wait > 0) {
+                    val secs = (wait + 999) / 1000
+                    respond(
+                        output, 429, "application/json",
+                        jsonBytes(
+                            mapOf(
+                                "ok" to false,
+                                "error" to "too many failed logins from this address; try again in $secs seconds",
+                            )
+                        ),
+                        listOf("Retry-After: $secs"),
+                    )
+                    return
+                }
                 val vals = parseFlatJson(String(body))
                 val user = vals["user"] ?: ""
                 val pass = vals["pass"] ?: ""
                 if (Prefs.verifyAdmin(user, pass)) {
+                    loginOk(from)
                     val token = newToken()
                     sessions[token] = System.currentTimeMillis() + 24 * 3600_000L
                     respond(
@@ -268,6 +285,7 @@ class HttpServer(
                         )
                     )
                 } else {
+                    loginFail(from)
                     respond(output, 401, "application/json", jsonBytes(mapOf("ok" to false, "error" to "bad credentials")))
                 }
             }
@@ -299,13 +317,17 @@ class HttpServer(
                                 "admin" to false,
                                 "anonView" to false,
                                 "auth" to who.method,
-                                "version" to BuildConfig.VERSION_NAME,
-                                "build" to BuildConfig.BUILD_ID,
                             )
                         )
                     )
                 } else {
                     val m = host.statusJson()
+                    // Which exact build runs is the admin's business: viewers
+                    // and the signed-out page get everything but that.
+                    if (role != Role.ADMIN) {
+                        m.remove("version")
+                        m.remove("build")
+                    }
                     m["admin"] = role == Role.ADMIN
                     m["anonView"] = Prefs.anonView
                     m["auth"] = who.method
@@ -476,6 +498,7 @@ class HttpServer(
         val header = "HTTP/1.1 200 OK\r\n" +
             "Content-Type: multipart/x-mixed-replace; boundary=${StreamHub.BOUNDARY}\r\n" +
             "Cache-Control: no-store\r\n" +
+            "X-Content-Type-Options: nosniff\r\n" +
             "Connection: close\r\n\r\n"
         try {
             output.write(header.toByteArray())
@@ -542,6 +565,7 @@ class HttpServer(
             sb.append("Content-Length: $length\r\n")
             sb.append("Accept-Ranges: bytes\r\n")
             sb.append("Cache-Control: no-store\r\n")
+            sb.append("X-Content-Type-Options: nosniff\r\n")
             if (partial) sb.append("Content-Range: bytes $start-$end/$total\r\n")
             sb.append("Connection: close\r\n\r\n")
             try {
@@ -574,7 +598,41 @@ class HttpServer(
 
     // ---- auth ---------------------------------------------------------
 
-    private fun authWho(headers: Map<String, String>): Who {
+    /** Client address -> [failure count, time of the last failed attempt]. */
+    private val loginFails = HashMap<String, LongArray>()
+    private val loginLock = Any()
+
+    /**
+     * Milliseconds the address still has to wait before its next credential
+     * attempt: after five failures the pause doubles with each further one,
+     * capped at about half an hour, so online guessing cannot run at
+     * connection speed. Zero when the attempt may proceed.
+     */
+    private fun loginWait(from: String): Long {
+        if (from.isEmpty()) return 0
+        val st = synchronized(loginLock) { loginFails[from] } ?: return 0
+        val count = st[0].toInt()
+        if (count < 5) return 0
+        val required = 2000L shl minOf(count - 5, 10)
+        return (required - (System.currentTimeMillis() - st[1])).coerceAtLeast(0)
+    }
+
+    private fun loginFail(from: String) {
+        if (from.isEmpty()) return
+        synchronized(loginLock) {
+            val st = loginFails[from]
+            val count = (st?.get(0)?.toInt() ?: 0) + 1
+            loginFails[from] = longArrayOf(count.toLong(), System.currentTimeMillis())
+            if (loginFails.size > 1024) loginFails.clear()
+        }
+    }
+
+    private fun loginOk(from: String) {
+        if (from.isEmpty()) return
+        synchronized(loginLock) { loginFails.remove(from) }
+    }
+
+    private fun authWho(headers: Map<String, String>, from: String): Who {
         val cookie = headers["cookie"]
         parseSid(cookie)?.let { sid ->
             val exp = sessions[sid]
@@ -587,6 +645,11 @@ class HttpServer(
         if (!hasCookie(cookie, "nobasic") && auth != null && auth.startsWith("Basic ", ignoreCase = true)) {
             val key = basicKey(auth)
             if (basicOk.containsKey(key)) return Who(Role.ADMIN, "basic")
+            // A run of bad passwords from one address buys growing pauses, so
+            // guessing cannot run at connection speed.
+            if (loginWait(from) > 0) {
+                return if (Prefs.anonView) Who(Role.ANON, "anon") else Who(Role.NONE, "none")
+            }
             try {
                 val dec = String(Base64.decode(auth.substring(6).trim(), Base64.DEFAULT))
                 val i = dec.indexOf(':')
@@ -595,10 +658,12 @@ class HttpServer(
                         basicOk.minByOrNull { it.value }?.let { basicOk.remove(it.key) }
                     }
                     basicOk[key] = System.currentTimeMillis()
+                    loginOk(from)
                     return Who(Role.ADMIN, "basic")
                 }
             } catch (_: Exception) {
             }
+            loginFail(from)
         }
         return if (Prefs.anonView) Who(Role.ANON, "anon") else Who(Role.NONE, "none")
     }
@@ -789,8 +854,8 @@ class HttpServer(
     ) {
         val reason = when (code) {
             200 -> "OK"; 204 -> "No Content"; 401 -> "Unauthorized"
-            403 -> "Forbidden"; 404 -> "Not Found"; 500 -> "Internal Server Error"
-            416 -> "Range Not Satisfiable"
+            403 -> "Forbidden"; 404 -> "Not Found"; 429 -> "Too Many Requests"
+            500 -> "Internal Server Error"; 416 -> "Range Not Satisfiable"
             411 -> "Length Required"; 413 -> "Payload Too Large"
             503 -> "Service Unavailable"
             else -> "OK"
@@ -800,6 +865,17 @@ class HttpServer(
         sb.append("Content-Type: $contentType\r\n")
         sb.append("Content-Length: ${body.size}\r\n")
         sb.append("Cache-Control: no-store\r\n")
+        // Everything is same-origin and the page is inline script and style:
+        // these headers mainly say so, and keep the page out of other sites.
+        sb.append("X-Content-Type-Options: nosniff\r\n")
+        sb.append("X-Frame-Options: DENY\r\n")
+        sb.append("Referrer-Policy: no-referrer\r\n")
+        sb.append("Strict-Transport-Security: max-age=31536000\r\n")
+        sb.append(
+            "Content-Security-Policy: default-src 'self'; " +
+                "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
+                "img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'\r\n"
+        )
         for (h in extra) sb.append(h).append("\r\n")
         sb.append("Connection: close\r\n\r\n")
         output.write(sb.toString().toByteArray())
