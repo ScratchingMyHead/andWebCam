@@ -52,7 +52,6 @@ class MainActivity : Activity() {
     private lateinit var batteryHint: TextView
     private lateinit var folderValue: TextView
     private lateinit var folderRow: Button
-    private lateinit var folderClear: Button
     /** The folder the displayed name was looked up for, so the one-per-second
      *  repaint does not ask the document provider each time. */
     private var folderShownFor: String? = null
@@ -142,22 +141,6 @@ class MainActivity : Activity() {
         } catch (e: Exception) {
             folderValue.text = "No folder picker on this phone: ${e.message}"
         }
-    }
-
-    private fun confirmClearFolder() {
-        AlertDialog.Builder(this)
-            .setTitle("Clear the storage location?")
-            .setMessage(
-                "andWebCam stops using this folder: recordings and the log's copy " +
-                    "stop until another one is chosen. The files already written " +
-                    "are left where they are."
-            )
-            .setNegativeButton("Cancel", null)
-            .setPositiveButton("Clear") { _, _ ->
-                LogFolder.clear(this)
-                update()
-            }
-            .show()
     }
 
     /**
@@ -281,7 +264,6 @@ class MainActivity : Activity() {
         folderValue.text = if (picked == null) "No storage location chosen"
         else "Storage location: ${folderShown ?: "chosen"}"
         folderRow.visibility = shown(enabled)
-        folderClear.visibility = shown(enabled && picked != null)
     }
 
     private fun shown(on: Boolean): Int = if (on) View.VISIBLE else View.GONE
@@ -383,9 +365,10 @@ class MainActivity : Activity() {
         root.addView(spacer())
 
         // The storage location holds everything andWebCam writes outside its
-        // own files: recordings in videos/, the log's copy in logs/. The
+        // own files: recordings in video/, the log's copy in logs/. The
         // grant is given here, on the phone, because the system picker has
-        // to be approved in person.
+        // to be approved in person. Picking again simply replaces it, so
+        // there is no separate clear.
         folderValue = text("", 13f)
         root.addView(folderValue)
         folderRow = Button(this).apply {
@@ -393,11 +376,6 @@ class MainActivity : Activity() {
             setOnClickListener { pickFolder() }
         }
         root.addView(folderRow)
-        folderClear = Button(this).apply {
-            text = "Clear storage location"
-            setOnClickListener { confirmClearFolder() }
-        }
-        root.addView(folderClear)
         root.addView(spacer())
 
         errorView = text("", 13f)

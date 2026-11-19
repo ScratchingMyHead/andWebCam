@@ -29,7 +29,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * The storage folder is granted once through the system document picker - it
  * is where recordings go, so the pane asks for it - and the grant survives
  * reboots. The log's place inside it is not configurable: always "logs",
- * next to the recordings' "videos".
+ * next to the recordings' "video".
  */
 object LogFolder {
     private const val TAG = "andWebCam"

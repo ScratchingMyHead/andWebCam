@@ -220,10 +220,6 @@ object WebUi {
         <input id="s_cap" type="number" min="1" max="100" step="1">
       </div>
       <p class="hint" id="recSpace">Free - · cap - · used -</p>
-      <div class="row">
-        <label>Folder on the phone</label>
-        <span id="v_folder" style="font-family:monospace">-</span>
-      </div>
 
       <h2>Videos</h2>
       <video id="recPlay" controls class="hidden"></video>
@@ -542,7 +538,6 @@ function refresh() {
     }
 
     el('foot').textContent = 'andWebCam ' + (s.version || '?') + (s.build ? ' · ' + s.build : '');
-    el('v_folder').textContent = s.logFolder || 'not chosen';
     el('loginBtn').classList.toggle('hidden', !!s.admin);
     el('logoutBtn').classList.toggle('hidden', !s.admin);
     // View-only users may save a frame too: the server already allows them.

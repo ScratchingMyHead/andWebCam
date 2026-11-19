@@ -96,7 +96,7 @@ time and rotating at about a megabyte. A crash writes the stack trace and the
 log up to that moment as a `crash-*.txt` file in the same place, so even a bad
 update leaves a readable log in an ordinary folder, reachable by any file
 manager or FTP server on the phone. The `logs` directory sits beside the
-recordings' `videos` directory; its name and place are not configurable.
+recordings' `video` directory; its name and place are not configurable.
 
 Choosing a folder uses the system picker once; the grant survives reboots.
 Clearing the folder stops the mirroring but leaves the files already written.
@@ -111,7 +111,7 @@ stream to the phone as MP4:
   so recording adds no work to the camera. Recording is part of the webcam
   being on: with streaming turned off the button is disabled, and switching
   streaming off ends a running recording.
-* Files are written to the storage folder's `videos` subfolder, one file per
+* Files are written to the storage folder's `video` subfolder, one file per
   recording, named `video-YYYYMMDD-HHMMSS.mp4` after the moment it started.
   The storage location is chosen once on the phone's screen.
 * **Storage limit** is a percentage of the volume's free space. Older videos

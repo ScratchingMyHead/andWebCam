@@ -22,7 +22,7 @@ import java.util.concurrent.TimeUnit
 /**
  * Manual video recording: the last 10 seconds of the stream (the VideoRing)
  * plus everything after the button press, encoded to one MP4 per session in
- * a videos/ subfolder of the chosen log folder.
+ * the video/ subfolder of the chosen storage location.
  *
  * Pipeline: JPEG -> Bitmap -> NV12 -> H.264 (MediaCodec) -> MediaMuxer.
  * The muxer needs an OS file descriptor, which SAF offers through
@@ -41,7 +41,7 @@ import java.util.concurrent.TimeUnit
 class Recorder(private val ctx: Context) {
     companion object {
         private const val TAG = "andWebCam"
-        const val VIDEOS_DIR = "videos"
+        const val VIDEOS_DIR = "video"
 
         /** Stop at this fraction of the cap, so the last write fits. */
         private const val STOP_MARGIN = 0.95
@@ -272,7 +272,7 @@ class Recorder(private val ctx: Context) {
     private fun beginSession(w: Int, h: Int) {
         val t = Saf.tree
         if (t == null) {
-            note("Choose a storage location on the phone first: recordings go into its videos subfolder.")
+            note("Choose a storage location on the phone first: recordings go into its video subfolder.")
             return
         }
         if (w < 32 || h < 32) {
@@ -281,7 +281,7 @@ class Recorder(private val ctx: Context) {
         }
         val d = Saf.ensureDir(cr, t, VIDEOS_DIR)
         if (d == null) {
-            note("The videos folder could not be opened in ${Saf.describe(ctx) ?: "the log folder"}.")
+            note("The video folder could not be opened in ${Saf.describe(ctx) ?: "the log folder"}.")
             return
         }
 
