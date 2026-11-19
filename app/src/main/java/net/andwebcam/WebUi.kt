@@ -224,11 +224,6 @@ object WebUi {
         <label>Folder on the phone</label>
         <span id="v_folder" style="font-family:monospace">-</span>
       </div>
-      <div class="actions">
-        <button id="doFolderPick" class="secondary">Choose folder</button>
-        <button id="doFolderClear" class="secondary">Clear</button>
-      </div>
-      <p class="hint" id="foldermsg">Recordings go into this folder's videos subfolder, and the log's copy into its logs subfolder. The picker opens on the phone's screen.</p>
 
       <h2>Videos</h2>
       <video id="recPlay" controls class="hidden"></video>
@@ -548,7 +543,6 @@ function refresh() {
 
     el('foot').textContent = 'andWebCam ' + (s.version || '?') + (s.build ? ' · ' + s.build : '');
     el('v_folder').textContent = s.logFolder || 'not chosen';
-    el('doFolderClear').classList.toggle('hidden', !s.logFolder);
     el('loginBtn').classList.toggle('hidden', !!s.admin);
     el('logoutBtn').classList.toggle('hidden', !s.admin);
     // View-only users may save a frame too: the server already allows them.
@@ -781,26 +775,6 @@ el('doUpdate').onclick = function() {
       updateBusy = false; b.disabled = false; b.textContent = 'Update software';
       updateMsg('The upload did not finish. Check that the phone is still reachable.');
     });
-};
-// The on-disk copy of the log. The system picker opens on the phone's
-// screen, so the choice is completed there (e.g. over VNC); the page
-// re-polls and shows the folder once it has been made.
-function folderMsg(t) { el('foldermsg').textContent = t; }
-el('doFolderPick').onclick = function() {
-  post('/api/folder/pick').then(function(r) {
-    if (r.ok === false) { folderMsg('Not authorized'); return; }
-    if (r.error) { folderMsg(r.error); return; }
-    folderMsg('The folder picker opened on the phone. Choose a folder there; it will show up here.');
-    setTimeout(refresh, 5000);
-  }).catch(function() { folderMsg('No answer from the phone.'); });
-};
-el('doFolderClear').onclick = function() {
-  if (!confirm('Stop using this folder? Recordings and the log\'s copy stop; files already written stay where they are.')) { return; }
-  post('/api/folder/clear').then(function(r) {
-    if (r.ok === false) { folderMsg('Not authorized'); return; }
-    folderMsg('The folder was cleared.');
-    setTimeout(refresh, 500);
-  }).catch(function() { folderMsg('No answer from the phone.'); });
 };
 // The panes share one slot next to the video: opening one closes the others
 // and the choice is remembered, so the video can fill the window.

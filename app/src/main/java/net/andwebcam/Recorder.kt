@@ -272,7 +272,7 @@ class Recorder(private val ctx: Context) {
     private fun beginSession(w: Int, h: Int) {
         val t = Saf.tree
         if (t == null) {
-            note("Choose a folder in the recording pane first: recordings go into its videos subfolder.")
+            note("Choose a storage location on the phone first: recordings go into its videos subfolder.")
             return
         }
         if (w < 32 || h < 32) {

@@ -653,25 +653,6 @@ class CamService : Service(), HttpServer.Host {
         return err
     }
 
-    /**
-     * Starts the picker on the phone's screen. The service cannot ask for an
-     * activity result itself, so the invisible stand-in does it and keeps the
-     * answer.
-     */
-    override fun pickFolder(): String? = try {
-        startActivity(
-            Intent(this, FolderPickActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-        )
-        null
-    } catch (e: Exception) {
-        "Could not open the folder picker: ${e.message}"
-    }
-
-    override fun clearFolder() {
-        LogFolder.clear(this)
-    }
-
     // ---- recording -----------------------------------------------------
 
     override fun startRecording(): String? {

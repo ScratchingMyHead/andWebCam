@@ -90,14 +90,13 @@ itself without a debug build or a cable.
 
 The log above only exists while a running app serves it. If an update crashes
 before the app answers, there is nothing left to read. To cover that, choose a
-storage folder on the phone (the recording pane's **Folder on the phone**, or
-the **Choose log folder** button on the phone's own screen) and the app keeps
-a copy of its log in `logs/andwebcam.log` inside it, growing over time and
-rotating at about a megabyte. A crash writes the stack trace and the log up to
-that moment as a `crash-*.txt` file in the same place, so even a bad update
-leaves a readable log in an ordinary folder, reachable by any file manager or
-FTP server on the phone. The `logs` directory sits beside the recordings'
-`videos` directory; its name and place are not configurable.
+storage location on the phone (the **Select storage location** button) and the
+app keeps a copy of its log in `logs/andwebcam.log` inside it, growing over
+time and rotating at about a megabyte. A crash writes the stack trace and the
+log up to that moment as a `crash-*.txt` file in the same place, so even a bad
+update leaves a readable log in an ordinary folder, reachable by any file
+manager or FTP server on the phone. The `logs` directory sits beside the
+recordings' `videos` directory; its name and place are not configurable.
 
 Choosing a folder uses the system picker once; the grant survives reboots.
 Clearing the folder stops the mirroring but leaves the files already written.
@@ -114,7 +113,7 @@ stream to the phone as MP4:
   streaming off ends a running recording.
 * Files are written to the storage folder's `videos` subfolder, one file per
   recording, named `video-YYYYMMDD-HHMMSS.mp4` after the moment it started.
-  The storage folder is chosen once in the recording pane.
+  The storage location is chosen once on the phone's screen.
 * **Storage limit** is a percentage of the volume's free space. Older videos
   are deleted to stay under it, and a recording stops by itself when it
   reaches the limit. The pane shows how much room there is and how much the

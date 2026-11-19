@@ -146,10 +146,11 @@ class MainActivity : Activity() {
 
     private fun confirmClearFolder() {
         AlertDialog.Builder(this)
-            .setTitle("Clear the log folder?")
+            .setTitle("Clear the storage location?")
             .setMessage(
-                "andWebCam stops copying its log there. The files already written " +
-                    "are left where they are, and choosing again starts a fresh log."
+                "andWebCam stops using this folder: recordings and the log's copy " +
+                    "stop until another one is chosen. The files already written " +
+                    "are left where they are."
             )
             .setNegativeButton("Cancel", null)
             .setPositiveButton("Clear") { _, _ ->
@@ -277,8 +278,8 @@ class MainActivity : Activity() {
             folderShown = LogFolder.describe(this)
             folderShownFor = picked
         }
-        folderValue.text = if (picked == null) "No log folder chosen"
-        else "Log folder: ${folderShown ?: "chosen"}"
+        folderValue.text = if (picked == null) "No storage location chosen"
+        else "Storage location: ${folderShown ?: "chosen"}"
         folderRow.visibility = shown(enabled)
         folderClear.visibility = shown(enabled && picked != null)
     }
@@ -381,17 +382,19 @@ class MainActivity : Activity() {
         root.addView(batteryHint)
         root.addView(spacer())
 
-        // The one-time folder pick that holds the on-disk copy of the log; it
-        // is the same grant video recording will use later.
+        // The storage location holds everything andWebCam writes outside its
+        // own files: recordings in videos/, the log's copy in logs/. The
+        // grant is given here, on the phone, because the system picker has
+        // to be approved in person.
         folderValue = text("", 13f)
         root.addView(folderValue)
         folderRow = Button(this).apply {
-            text = "Choose log folder"
+            text = "Select storage location"
             setOnClickListener { pickFolder() }
         }
         root.addView(folderRow)
         folderClear = Button(this).apply {
-            text = "Clear log folder"
+            text = "Clear storage location"
             setOnClickListener { confirmClearFolder() }
         }
         root.addView(folderClear)
