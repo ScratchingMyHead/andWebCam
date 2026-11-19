@@ -31,6 +31,24 @@ fun git(vararg args: String): String = try {
 val buildId = git("rev-parse", "--short", "HEAD").ifEmpty { "unknown" } +
     (if (git("status", "--porcelain").isNotEmpty()) "-dirty" else "")
 
+// Versioning: the base name and code are bumped by hand when a new major or
+// minor series starts; the patch level is a per-checkout monotonic counter in
+// .buildcounter (gitignored, so every checkout numbers its own builds) that
+// advances on every Gradle run, debug or release alike. Every build is thus
+// an installable upgrade of every earlier one, and the running app always
+// says which build it is - in the page footer, the status endpoint, and the
+// startup log line. At a base bump, delete .buildcounter to restart the
+// patch at 1 if you like. The counter is capped well below the 1000-step
+// headroom so a base bump cannot collide with a live patch.
+val versionBase = "1.4"
+val versionBaseCode = 11
+val counterFile = rootProject.file(".buildcounter")
+val patch = (counterFile.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() ?: 0) + 1
+check(patch < 1000) {
+    "the $versionBase patch level has reached $patch; bump versionBase/versionBaseCode and reset .buildcounter"
+}
+counterFile.writeText(patch.toString())
+
 android {
     namespace = "net.andwebcam"
     compileSdk = 34
@@ -48,8 +66,8 @@ android {
         applicationId = "net.andwebcam"
         minSdk = 28
         targetSdk = 34
-        versionCode = 11
-        versionName = "1.4"
+        versionCode = versionBaseCode * 1000 + patch
+        versionName = "$versionBase.$patch"
         buildConfigField("String", "BUILD_ID", "\"$buildId\"")
     }
 

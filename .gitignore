@@ -5,6 +5,9 @@ captures/
 .externalNativeBuild/
 .cxx/
 build/
+# Per-checkout build counter that numbers the patch level of every build;
+# see the versioning block in app/build.gradle.kts.
+.buildcounter
 local.properties
 *.apk
 *.keystore
