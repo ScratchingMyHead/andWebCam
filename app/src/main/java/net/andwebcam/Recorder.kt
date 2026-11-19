@@ -680,11 +680,15 @@ class Recorder(private val ctx: Context) {
                     val ar = sr / n
                     val ag = sg / n
                     val ab = sb / n
-                    uvBuf[u++] = ((-38 * ar - 74 * ag + 112 * ab + 128) shr 8).toByte()
-                    uvBuf[u++] = ((112 * ar - 94 * ag - 18 * ab + 128) shr 8).toByte()
+                    // Cb and Cr are signed differences: the +128 inside the
+                    // shift rounds, the +128 outside puts them back on the
+                    // 0..255 scale (128 = no colour). Without that second
+                    // one a neutral pixel becomes 0, i.e. maximum colour.
+                    uvBuf[u++] = ((((-38 * ar - 74 * ag + 112 * ab + 128) shr 8) + 128)).toByte()
+                    uvBuf[u++] = ((((112 * ar - 94 * ag - 18 * ab + 128) shr 8) + 128)).toByte()
                 } else {
-                    uvBuf[u++] = 0
-                    uvBuf[u++] = 0
+                    uvBuf[u++] = 128.toByte()
+                    uvBuf[u++] = 128.toByte()
                 }
                 px += 2
             }
