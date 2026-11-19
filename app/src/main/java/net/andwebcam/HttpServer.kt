@@ -72,6 +72,24 @@ class HttpServer(
          * output rate. Diagnostic only; never surfaced in the page.
          */
         fun diag(mode: String, seconds: Int, resolution: String): String
+
+        /** Starts a recording session; null when accepted, else why not. */
+        fun startRecording(): String?
+
+        /** Stops the running session; the file is finalized asynchronously. */
+        fun stopRecording()
+
+        /** The recordings' share of the free space, in percent. Null on success. */
+        fun setRecordingCap(percent: Int): String?
+
+        /** The recording pane's data: storage figures and the finished videos. */
+        fun recordingInfo(): Map<String, Any?>
+
+        /** Deletes one finished video; null when done. */
+        fun deleteRecording(name: String): String?
+
+        /** A finished video for playback, or null when there is none. */
+        fun videoFile(name: String): Recorder.File?
     }
 
     private enum class Role { ADMIN, ANON, NONE }
@@ -380,6 +398,63 @@ class HttpServer(
                 }
             }
 
+            // The pane's actions; only the pane itself uses them, so the
+            // viewer role gets nothing from this area but the files.
+            method == "POST" && path == "/api/record/start" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val err = host.startRecording()
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(mapOf("ok" to (err == null), "error" to err)),
+                    )
+                }
+            }
+
+            method == "POST" && path == "/api/record/stop" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    host.stopRecording()
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                }
+            }
+
+            method == "POST" && path == "/api/record/cap" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    val err = host.setRecordingCap(vals["percent"]?.toIntOrNull() ?: 0)
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(mapOf("ok" to (err == null), "error" to err)),
+                    )
+                }
+            }
+
+            method == "POST" && path == "/api/record/delete" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    val err = host.deleteRecording(vals["name"] ?: "")
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(mapOf("ok" to (err == null), "error" to err)),
+                    )
+                }
+            }
+
+            method == "GET" && path == "/api/record/list" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    respond(output, 200, "application/json", jsonBytes(host.recordingInfo()))
+                }
+            }
+
+            // Play a finished recording. The list is admin-only, but a video
+            // URL shared with a viewer plays like a stream frame does.
+            method == "GET" && path == "/video/file" -> {
+                if (role == Role.NONE) unauthorized(output) else {
+                    val file = host.videoFile(queryParam(query, "name") ?: "")
+                    if (file == null) respond(output, 404, "text/plain", "no such video".toByteArray())
+                    else serveVideoFile(output, file, headers)
+                }
+            }
+
             method == "GET" && path == "/video" -> {
                 when {
                     role == Role.NONE -> unauthorized(output)
@@ -432,6 +507,85 @@ class HttpServer(
         try {
             client.done.await()
         } catch (_: InterruptedException) {
+        }
+    }
+
+    /**
+     * A finished recording, with byte ranges: a browser player that cannot
+     * seek would have to download the whole file before the first frame, and
+     * some start from the end of it, so a request for a range is answered
+     * with one.
+     */
+    private fun serveVideoFile(output: BufferedOutputStream, file: Recorder.File, headers: Map<String, String>) {
+        val stream = file.open()
+        if (stream == null) {
+            respond(output, 503, "text/plain", "the video could not be opened".toByteArray())
+            return
+        }
+        stream.use { s ->
+            val total = file.size
+            var start = 0L
+            var end = total - 1
+            var partial = false
+            val r = headers["range"]
+            if (r != null && r.startsWith("bytes=", ignoreCase = true)) {
+                val spec = r.substring(6)
+                val dash = spec.indexOf('-')
+                val a = if (dash > 0) spec.substring(0, dash).trim() else ""
+                val b = spec.substring(dash + 1).trim()
+                val aL = a.toLongOrNull()
+                val bL = b.toLongOrNull()
+                when {
+                    aL == null && bL != null -> start = (total - bL).coerceAtLeast(0)
+                    aL != null -> {
+                        start = aL
+                        if (bL != null) end = bL.coerceAtMost(total - 1)
+                    }
+                }
+                if (total <= 0 || start > end || start >= total) {
+                    respond(
+                        output, 416, "text/plain", ByteArray(0),
+                        listOf("Accept-Ranges: bytes", "Content-Range: bytes */${total.coerceAtLeast(0)}"),
+                    )
+                    return
+                }
+                partial = true
+            }
+            val length = end - start + 1
+            val sb = StringBuilder()
+            sb.append("HTTP/1.1 ").append(if (partial) 206 else 200)
+                .append(if (partial) " Partial Content" else " OK").append("\r\n")
+            sb.append("Content-Type: video/mp4\r\n")
+            sb.append("Content-Length: $length\r\n")
+            sb.append("Accept-Ranges: bytes\r\n")
+            sb.append("Cache-Control: no-store\r\n")
+            if (partial) sb.append("Content-Range: bytes $start-$end/$total\r\n")
+            sb.append("Connection: close\r\n\r\n")
+            try {
+                output.write(sb.toString().toByteArray())
+                output.flush()
+            } catch (e: Exception) {
+                return
+            }
+            val buf = ByteArray(64 * 1024)
+            var remaining = length
+            var skipped = 0L
+            try {
+                while (skipped < start) {
+                    val n = s.skip(start - skipped)
+                    if (n <= 0) break
+                    skipped += n
+                }
+                while (remaining > 0) {
+                    val n = s.read(buf, 0, minOf(buf.size, remaining.toInt()))
+                    if (n < 0) break
+                    output.write(buf, 0, n)
+                    remaining -= n
+                }
+            } catch (e: Exception) {
+                return
+            }
+            output.flush()
         }
     }
 
@@ -653,6 +807,7 @@ class HttpServer(
         val reason = when (code) {
             200 -> "OK"; 204 -> "No Content"; 401 -> "Unauthorized"
             403 -> "Forbidden"; 404 -> "Not Found"; 500 -> "Internal Server Error"
+            416 -> "Range Not Satisfiable"
             411 -> "Length Required"; 413 -> "Payload Too Large"
             503 -> "Service Unavailable"
             else -> "OK"

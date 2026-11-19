@@ -69,6 +69,11 @@ object WebUi {
  .badge.locked { background:#7a2f2f }
  .err { color:#f66; font-size:12px; min-height:1.2em; margin:6px 0 0 }
  .hint { color:#888; font-size:12px; margin:6px 0 0 }
+ .vrow { display:flex; align-items:center; gap:8px; margin:7px 0 }
+ .vname { flex:1; font-family:monospace; font-size:12px; color:#dde; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+ .vmeta { font-size:11px; color:#889; white-space:nowrap }
+ .vrow button { padding:4px 9px; font-size:12px }
+ #recPlay { width:100%; margin:9px 0 0; background:#000 }
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
  .check { display:flex; align-items:center; gap:8px; font-size:13px; color:#bbb }
@@ -201,11 +206,27 @@ object WebUi {
       <p class="hint" id="foldermsg">A copy of the log is kept in this folder, so it exists even if the app stops working. The picker opens on the phone's screen.</p>
     </div>
     <div class="panel hidden" id="recPane">
-      <h2>Recording</h2>
+      <h2>Record</h2>
       <div class="actions">
+        <button id="recBtn">Record</button>
         <button id="recPaneClose" class="paneClose" title="Hide the recording pane" aria-label="Hide the recording pane">&raquo;</button>
       </div>
-      <p class="hint">The record button and the list of recorded videos will appear here.</p>
+      <p class="err hidden" id="recMsg"></p>
+      <p class="hint hidden" id="recNote"></p>
+      <p class="hint">A recording starts with the last 10 seconds of the stream and ends when it is stopped, or when the storage cap is reached.</p>
+
+      <h2>Storage</h2>
+      <div class="row">
+        <label>Cap, percent of free space: <span id="v_capv">10</span></label>
+        <input id="s_cap" type="number" min="1" max="100" step="1">
+      </div>
+      <p class="hint" id="recSpace">The oldest videos are deleted first as the total approaches the cap.</p>
+
+      <h2>Videos</h2>
+      <video id="recPlay" controls class="hidden"></video>
+      <div id="recList">
+        <p class="hint">Nothing recorded yet.</p>
+      </div>
     </div>
     <div class="panel hidden" id="zonesPane">
       <h2>Zones</h2>
@@ -783,6 +804,18 @@ function applyPane() {
   el('admin').classList.toggle('hidden', !(admin && open === 'settings'));
   el('recPane').classList.toggle('hidden', !(admin && open === 'recording'));
   el('zonesPane').classList.toggle('hidden', !(admin && open === 'zones'));
+  // The recording pane polls its own list while it is open, and the player
+  // does not keep running behind a closed one.
+  if (admin && open === 'recording') {
+    if (!recPoll) {
+      recPoll = setInterval(recPollTick, 2500);
+      recRefresh();
+    }
+  } else if (recPoll) {
+    clearInterval(recPoll);
+    recPoll = null;
+    recStopPlayer();
+  }
   updatePan();
 }
 function openPane(which) {
@@ -823,6 +856,160 @@ function loginKey(e) {
 }
 el('l_user').addEventListener('keydown', loginKey);
 el('l_pass').addEventListener('keydown', loginKey);
+// ---- the recording pane --------------------------------------------------
+// The list is polled on its own timer, only while the pane is open (applyPane
+// starts and stops it), because every poll lists the folder on the phone.
+var recPoll = null;
+var recPlaying = null;
+var recNoteSeen = null;
+function recFmtSize(b) {
+  if (b == null || b === undefined || isNaN(b)) { return '-'; }
+  if (b < 1024) { return b + ' B'; }
+  if (b < 1024 * 1024) { return (b / 1024).toFixed(1) + ' KB'; }
+  return (b / 1024 / 1024).toFixed(1) + ' MB';
+}
+function recFmtDur(s) {
+  if (!s || s <= 0) { return ''; }
+  s = Math.round(s);
+  var m = Math.floor(s / 60);
+  return (m ? m + ' min ' : '') + (s % 60) + ' s';
+}
+function recMsg(text) {
+  var m = el('recMsg');
+  m.textContent = text || '';
+  m.classList.toggle('hidden', !text);
+  if (text) {
+    clearTimeout(recMsg.t);
+    recMsg.t = setTimeout(function() { recMsg(''); }, 8000);
+  }
+}
+function recStopPlayer() {
+  var v = el('recPlay');
+  try { v.pause(); } catch (e) {}
+  v.removeAttribute('src');
+  v.classList.add('hidden');
+  recPlaying = null;
+}
+function recPlay(name) {
+  recPlaying = name;
+  var v = el('recPlay');
+  v.classList.remove('hidden');
+  v.src = '/video/file?name=' + encodeURIComponent(name);
+  v.play().catch(function() {});
+}
+function recRefresh() {
+  if (!(window.S && window.S.admin)) { return; }
+  if (el('recPane').classList.contains('hidden')) { return; }
+  fetch('/api/record/list').then(function(r) { return r.json(); }).then(function(d) {
+    var btn = el('recBtn');
+    btn.classList.toggle('danger', !!d.recording);
+    if (!btn.disabled) {
+      btn.textContent = d.recording ? 'Stop recording' : 'Record';
+    }
+    // Without a folder there is nowhere to write, and a session started with
+    // no frames would just end up empty.
+    btn.disabled = !window.S.logFolder;
+    // The note is the last thing the recorder said; show it once, not on
+    // every poll.
+    if (d.note && d.note !== recNoteSeen) { recNoteSeen = d.note; recMsg(d.note); }
+    if (document.activeElement !== el('s_cap')) { el('s_cap').value = d.capPercent || 10; }
+    el('v_capv').textContent = d.capPercent || 10;
+    el('s_cap').disabled = !!d.recording;
+    el('recSpace').textContent = d.free == null
+      ? 'The space of this folder cannot be measured, so the cap does not apply.'
+      : 'Free ' + recFmtSize(d.free) + ' · cap ' + recFmtSize(d.cap) + ' · used ' + recFmtSize(d.used) +
+        ' of the ' + (d.capPercent || 0) + ' percent. The oldest videos go first.';
+    var list = el('recList');
+    list.innerHTML = '';
+    var vids = d.videos || [];
+    if (!vids.length) {
+      var p = document.createElement('p');
+      p.className = 'hint';
+      p.textContent = 'Nothing recorded yet.';
+      list.appendChild(p);
+      return;
+    }
+    vids.forEach(function(v) {
+      var row = document.createElement('div');
+      row.className = 'vrow';
+      var name = document.createElement('span');
+      name.className = 'vname';
+      name.textContent = v.name;
+      name.title = v.name;
+      var meta = document.createElement('span');
+      meta.className = 'vmeta';
+      meta.textContent = [recFmtDur(v.seconds), recFmtSize(v.size)].filter(Boolean).join(' · ');
+      var play = document.createElement('button');
+      play.className = 'secondary';
+      play.textContent = recPlaying === v.name ? 'Stop' : 'Play';
+      play.onclick = function() {
+        if (recPlaying === v.name) { recStopPlayer(); }
+        else { recPlay(v.name); }
+        recRefresh();
+      };
+      var del = document.createElement('button');
+      del.className = 'secondary';
+      del.textContent = 'Delete';
+      del.onclick = function() {
+        if (!confirm('Delete ' + v.name + '?')) { return; }
+        del.disabled = true;
+        post('/api/record/delete', { name: v.name }).then(function(r) {
+          if (r.ok === false) {
+            del.disabled = false;
+            recMsg(r.error || 'Could not delete the video');
+          } else {
+            if (recPlaying === v.name) { recStopPlayer(); }
+            recRefresh();
+          }
+        }).catch(function() { del.disabled = false; });
+      };
+      row.appendChild(name);
+      row.appendChild(meta);
+      row.appendChild(play);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  }).catch(function() {});
+}
+function recPollTick() { recRefresh(); }
+el('recBtn').onclick = function() {
+  var b = el('recBtn');
+  if (b.disabled) { return; }
+  b.disabled = true;
+  if (window.S && window.S.recording) {
+    b.textContent = 'Stopping...';
+    post('/api/record/stop', {}).then(function() {
+      b.disabled = false;
+      // The answer arrives before the file is finalized on the phone; check
+      // again once it has been.
+      setTimeout(recRefresh, 500);
+      setTimeout(recRefresh, 2500);
+    }).catch(function() { b.disabled = false; });
+  } else {
+    b.textContent = 'Starting...';
+    post('/api/record/start', {}).then(function(r) {
+      b.disabled = false;
+      if (r.ok === false) {
+        recMsg(r.error || 'Could not start recording');
+        b.textContent = 'Record';
+      }
+      setTimeout(recRefresh, 500);
+    }).catch(function() {
+      b.disabled = false;
+      b.textContent = 'Record';
+    });
+  }
+};
+el('s_cap').onchange = function() {
+  var p = parseInt(this.value, 10);
+  if (!p || p < 1 || p > 100) { this.value = el('s_cap').value || 10; return; }
+  post('/api/record/cap', { percent: p }).then(function(r) {
+    if (r.ok === false) { recMsg(r.error || 'Could not set the cap'); }
+    else { setTimeout(recRefresh, 250); }
+  }).catch(function() {});
+};
+el('recPlay').addEventListener('ended', function() { recPlaying = null; });
+el('recPlay').addEventListener('error', function() { recPlaying = null; });
 scaleMode = scalePref() || 'fit';
 applyScale();
 refresh();

@@ -40,8 +40,8 @@ val buildId = git("rev-parse", "--short", "HEAD").ifEmpty { "unknown" } +
 // startup log line. At a base bump, delete .buildcounter to restart the
 // patch at 1 if you like. The counter is capped well below the 1000-step
 // headroom so a base bump cannot collide with a live patch.
-val versionBase = "1.4"
-val versionBaseCode = 11
+val versionBase = "1.5"
+val versionBaseCode = 12
 val counterFile = rootProject.file(".buildcounter")
 val patch = (counterFile.takeIf { it.exists() }?.readText()?.trim()?.toIntOrNull() ?: 0) + 1
 check(patch < 1000) {

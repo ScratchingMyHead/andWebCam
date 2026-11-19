@@ -36,6 +36,7 @@ object Prefs {
     private const val KEY_CLEAN_EXIT = "clean_exit"
     private const val KEY_LOG_FOLDER = "log_folder"
     private const val KEY_LAST_MIRROR_LINE = "last_mirror_line"
+    private const val KEY_VIDEO_CAP_PERCENT = "video_cap_percent"
 
     private const val KEY_ADMIN_USER = "admin_user"
     private const val KEY_PASS_PLAIN = "pass_plain"
@@ -181,6 +182,16 @@ object Prefs {
             if (v == null) edit { remove(KEY_LAST_MIRROR_LINE) }
             else edit { putString(KEY_LAST_MIRROR_LINE, v.take(512)) }
         }
+
+    /**
+     * How much of the free space the recordings may occupy, as a percentage.
+     * The oldest videos are deleted first as the total approaches it, and a
+     * running recording stops cleanly when even deleting everything would
+     * not keep it under.
+     */
+    var videoCapPercent: Int
+        get() = sp.getInt(KEY_VIDEO_CAP_PERCENT, 10)
+        set(v) = edit { putInt(KEY_VIDEO_CAP_PERCENT, v.coerceIn(1, 100)) }
 
     // ---- admin credentials ------------------------------------------------
 

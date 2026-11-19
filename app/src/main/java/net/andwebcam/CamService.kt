@@ -75,6 +75,8 @@ class CamService : Service(), HttpServer.Host {
     private lateinit var hub: StreamHub
     private lateinit var camera: CameraController
     private lateinit var server: HttpServer
+    private val ring = VideoRing()
+    private val recorder = Recorder(this)
     private var mdns: Mdns? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -90,12 +92,22 @@ class CamService : Service(), HttpServer.Host {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val cameraRetry = Runnable {
-        if (started && streamingEnabled && hub.count > 0) camera.start()
+        if (started && (recorder.recording || (streamingEnabled && hub.count > 0))) camera.start()
     }
+    /**
+     * Close the camera and end the ring's run of frames. The pre-roll must
+     * be continuous live video: frames from before the camera paused would
+     * leave a hole at the start of the next recording.
+     */
+    private fun closeCamera() {
+        camera.stop()
+        ring.clear()
+    }
+
     private val idleStop = Runnable {
-        if (started && hub.count == 0) {
+        if (started && hub.count == 0 && !recorder.recording) {
             Log.i(TAG, "no viewers; closing camera to save power")
-            camera.stop()
+            closeCamera()
             updateNotification()
         }
     }
@@ -105,10 +117,29 @@ class CamService : Service(), HttpServer.Host {
         super.onCreate()
         Prefs.init(this)
         hub = StreamHub()
+        recorder.ringRef = ring
+        recorder.onStopped = {
+            // The camera may now be the last reason to stay open.
+            mainHandler.post {
+                if (!started) return@post
+                mainHandler.removeCallbacks(idleStop)
+                if (hub.count == 0) {
+                    if (streamingEnabled) {
+                        mainHandler.postDelayed(idleStop, 5000)
+                    } else if (camera.active) {
+                        Log.i(TAG, "recording finished and no viewers; closing camera")
+                        closeCamera()
+                    }
+                }
+                updateNotification()
+            }
+        }
         camera = CameraController(
             this,
             onFrame = { jpeg ->
                 if (State.lastError != null) State.lastError = null
+                ring.push(jpeg)
+                recorder.push(jpeg)
                 hub.broadcast(jpeg)
             },
             onError = { msg ->
@@ -197,6 +228,7 @@ class CamService : Service(), HttpServer.Host {
         watchNetwork()
         scheduleMaintenance()
         LogFolder.mirror(this)   // also picks up the lines a previous run left
+        Thread { recorder.cleanupOrphans() }.apply { isDaemon = true }.start()
 
         if (!camera.hasPermission()) {
             State.lastError = "Camera permission not granted. Allow the camera for andWebCam in the phone's app settings."
@@ -424,7 +456,9 @@ class CamService : Service(), HttpServer.Host {
         } else {
             hub.disconnectAll()
             mainHandler.removeCallbacks(idleStop)
-            camera.stop()
+            // A recording keeps the camera open even with streaming stopped.
+            if (!recorder.recording) closeCamera()
+            else mainHandler.postDelayed(idleStop, 5000)
         }
         updateNotification()
     }
@@ -443,7 +477,10 @@ class CamService : Service(), HttpServer.Host {
         unwatchNetwork()
         cancelMaintenance()
         server.stop()
-        camera.stop()
+        // A running session must end with the service, or its file is left
+        // unfinishable and the next start deletes it.
+        recorder.stopBlocking(3000)
+        closeCamera()
         releaseLocks()
         scheduler?.shutdownNow()
         scheduler = null
@@ -476,6 +513,11 @@ class CamService : Service(), HttpServer.Host {
             "height" to sz.height,
             "streaming" to streamingEnabled,
             "cameraActive" to camera.active,
+            // The recording pane shows its details from /api/record/list; the
+            // status carries the state so the banner can announce a session
+            // even with the pane closed.
+            "recording" to recorder.recording,
+            "recNote" to recorder.lastNote,
             "autoStartStreaming" to Prefs.autoStartStreaming,
             "lastError" to State.lastError,
             // The folder holding the on-disk copy of the log; null while none
@@ -546,9 +588,9 @@ class CamService : Service(), HttpServer.Host {
         } catch (_: InterruptedException) {
         }
         // If the camera was opened just for this picture, close it again
-        // unless somebody started watching in the meantime.
+        // unless somebody started watching or a recording is running.
         mainHandler.post {
-            if (started && hub.count == 0) camera.stop()
+            if (started && hub.count == 0 && !recorder.recording) closeCamera()
         }
         return out[0]
     }
@@ -628,6 +670,30 @@ class CamService : Service(), HttpServer.Host {
     override fun clearFolder() {
         LogFolder.clear(this)
     }
+
+    // ---- recording -----------------------------------------------------
+
+    override fun startRecording(): String? {
+        if (recorder.recording) return null
+        // Frames come from the camera; a session that starts with it closed
+        // would just fill the file with silence, so open it first.
+        camera.start()
+        return recorder.start(camera.currentSize.width, camera.currentSize.height)
+    }
+
+    override fun stopRecording() = recorder.stop()
+
+    override fun setRecordingCap(percent: Int): String? {
+        if (percent !in 1..100) return "the cap is between 1 and 100 percent"
+        Prefs.videoCapPercent = percent
+        return null
+    }
+
+    override fun recordingInfo(): Map<String, Any?> = recorder.list()
+
+    override fun deleteRecording(name: String): String? = recorder.delete(name)
+
+    override fun videoFile(name: String): Recorder.File? = recorder.videoFile(name)
 
     override fun reboot(): String? {
         val dpm = getSystemService(DevicePolicyManager::class.java)

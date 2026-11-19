@@ -101,6 +101,34 @@ FTP server on the phone.
 Choosing a folder uses the system picker once; the grant survives reboots.
 Clearing the folder stops the mirroring but leaves the files already written.
 
+## Recording
+
+The **Recording** pane (the round button in the page's corner) records the
+stream to the phone as MP4:
+
+* **Record** starts a file and **Stop** finishes it. The ten seconds before
+  the press are included, and only while the camera is already running — the
+  phone keeps the frames it was streaming anyway, so recording adds no work
+  to the camera.
+* Files are written to the `videos` folder next to the `andwebcam` log folder,
+  one file per recording, named `video-YYYYMMDD-HHMMSS.mp4` after the moment
+  it started.
+* **Storage limit** is a percentage of the volume's free space. Older videos
+  are deleted to stay under it, and a recording stops by itself when it
+  reaches the limit. The pane shows how much room there is and how much the
+  videos take.
+* The list under the pane plays a video in place; **Delete** removes it.
+
+To fetch one without a browser:
+
+```
+curl -k -u admin:PASSWORD -O \
+     'https://andwebcam.local:8443/video/file?name=video-20260101-120000.mp4'
+```
+
+The same URL as a `<video src>` supports byte ranges, so players seek instead
+of downloading the whole file first.
+
 ## Consuming it on a PC
 
 `/video` needs the login unless anonymous view-only access is on, so the
