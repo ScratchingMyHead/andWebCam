@@ -772,22 +772,14 @@ el('doUpdate').onclick = function() {
     });
 };
 // The panes share one slot next to the video: opening one closes the others
-// and the choice is remembered, so the video can fill the window.
+// and the choice lasts for the page: logging in or reloading always lands
+// on the settings pane, however the last visit ended.
 var PANES = { paneToggle: 'settings', recPaneToggle: 'recording', zonesPaneToggle: 'zones' };
 var PANE_TITLES = { settings: 'the settings pane', recording: 'the recording pane', zones: 'the zones pane' };
-function panePref(v) {
-  try {
-    if (v === undefined) {
-      var p = localStorage.getItem('awcPane');
-      return p === 'shown' || p === null ? 'settings' : p; // 'shown' predates the other panes
-    }
-    localStorage.setItem('awcPane', v);
-  } catch (e) {}
-  return 'settings';
-}
+var pane = 'settings';
 function applyPane() {
   var admin = !!(window.S && window.S.admin);
-  var open = panePref();
+  var open = pane;
   for (var btn in PANES) {
     var p = PANES[btn];
     var b = el(btn);
@@ -815,14 +807,14 @@ function applyPane() {
 }
 function openPane(which) {
   // The button of the pane that is open hides it; any other button switches.
-  panePref(panePref() === which ? 'hidden' : which);
+  pane = pane === which ? 'hidden' : which;
   applyPane();
 }
 el('paneToggle').onclick = function() { openPane('settings'); };
 el('recPaneToggle').onclick = function() { openPane('recording'); };
 el('zonesPaneToggle').onclick = function() { openPane('zones'); };
 el('paneClose').onclick = el('recPaneClose').onclick = el('zonesPaneClose').onclick = function() {
-  panePref('hidden');
+  pane = 'hidden';
   applyPane();
 };
 el('loginBtn').onclick = function() { el('loginForm').classList.toggle('hidden'); };
