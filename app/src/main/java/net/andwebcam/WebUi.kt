@@ -49,6 +49,7 @@ object WebUi {
  button { background:#2b6cb0; color:#fff; border:0; border-radius:6px; padding:9px 12px; cursor:pointer; font-size:13px }
  button.secondary { background:#333 }
  button.danger { background:#8a3030 }
+ button:disabled { opacity:.45; cursor:default }
  .actions { display:flex; gap:8px; flex-wrap:wrap }
  .paneClose { margin-left:auto; padding:5px 10px; font-size:15px; line-height:1.1; background:#2b2b2b; color:#9ab }
  .paneClose:hover { background:#3a3a3a; color:#fff }
@@ -72,7 +73,8 @@ object WebUi {
  .vrow { display:flex; align-items:center; gap:8px; margin:7px 0 }
  .vname { flex:1; font-family:monospace; font-size:12px; color:#dde; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
  .vmeta { font-size:11px; color:#889; white-space:nowrap }
- .vrow button { padding:4px 9px; font-size:12px }
+ .vrow button { padding:5px 9px; font-size:12px }
+ .vrow button svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
  #recPlay { width:100%; margin:9px 0 0; background:#000 }
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
@@ -92,7 +94,7 @@ object WebUi {
     <button data-scale="1" title="Actual size, 1:1 (drag to pan)">1:1</button>
   </span>
   <button id="paneToggle" class="iconbtn hidden" title="Hide the settings pane" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
-  <button id="recPaneToggle" class="iconbtn hidden" title="Show the recording pane" aria-label="Recording"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/></svg></button>
+  <button id="recPaneToggle" class="iconbtn hidden" title="Show the recording pane" aria-label="Recording"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="#f44336" stroke="none"/></svg></button>
 <button id="zonesPaneToggle" class="iconbtn hidden" title="Show the zones pane" aria-label="Zones"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 3.5 19.8 7.75 19.8 16.25 12 20.5 4.2 16.25 4.2 7.75"/></svg></button>
 <button id="logoutBtn" class="iconbtn hidden" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
   <button id="loginBtn" class="iconbtn" title="Log in" aria-label="Log in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></button>
@@ -863,6 +865,11 @@ var recPoll = null;
 var recPlaying = null;
 var recNoteSeen = null;
 var recNoteArmed = false;
+// Glyphs for the video rows: a record dot's worth of pixels each, and they
+// read the same on every platform, unlike font-dependent symbols.
+var ICON_PLAY = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.1 12.7 8 5 12.9z"/></svg>';
+var ICON_STOP = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.2"/></svg>';
+var ICON_BIN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.2 1.6h3.6v1.1h3.6v1.5H2.6V2.7h3.6zM3.5 5.5h9l-.7 8.9H4.2z"/></svg>';
 function recFmtSize(b) {
   if (b == null || b === undefined || isNaN(b)) { return '-'; }
   if (b < 1024) { return b + ' B'; }
@@ -969,7 +976,9 @@ function recRefresh() {
       meta.textContent = [recFmtDur(v.seconds), recFmtSize(v.size)].filter(Boolean).join(' · ');
       var play = document.createElement('button');
       play.className = 'secondary';
-      play.textContent = recPlaying === v.name ? 'Stop' : 'Play';
+      play.innerHTML = recPlaying === v.name ? ICON_STOP : ICON_PLAY;
+      play.title = recPlaying === v.name ? 'Stop' : 'Play';
+      play.setAttribute('aria-label', play.title + ' ' + v.name);
       play.onclick = function() {
         if (recPlaying === v.name) { recStopPlayer(); }
         else { recPlay(v.name); }
@@ -977,7 +986,9 @@ function recRefresh() {
       };
       var del = document.createElement('button');
       del.className = 'secondary';
-      del.textContent = 'Delete';
+      del.innerHTML = ICON_BIN;
+      del.title = 'Delete';
+      del.setAttribute('aria-label', 'Delete ' + v.name);
       del.onclick = function() {
         if (!confirm('Delete ' + v.name + '?')) { return; }
         del.disabled = true;

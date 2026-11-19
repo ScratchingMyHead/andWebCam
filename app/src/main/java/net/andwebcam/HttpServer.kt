@@ -563,6 +563,9 @@ class HttpServer(
             sb.append("HTTP/1.1 ").append(if (partial) 206 else 200)
                 .append(if (partial) " Partial Content" else " OK").append("\r\n")
             sb.append("Content-Type: video/mp4\r\n")
+            // Naming the file here as well as in the URL: a downloader that
+            // only looks at headers still gets the video's own name.
+            sb.append("Content-Disposition: attachment; filename=\"${file.name}\"\r\n")
             sb.append("Content-Length: $length\r\n")
             sb.append("Accept-Ranges: bytes\r\n")
             sb.append("Cache-Control: no-store\r\n")
