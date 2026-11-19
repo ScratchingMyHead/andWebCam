@@ -90,13 +90,14 @@ itself without a debug build or a cable.
 
 The log above only exists while a running app serves it. If an update crashes
 before the app answers, there is nothing left to read. To cover that, choose a
-folder on the phone (the **Log file** section of the settings pane, or the
-**Choose log folder** button on the phone's own screen) and the app keeps a
-copy of its log in `andwebcam/andwebcam.log` inside it, growing over time and
+storage folder on the phone (the recording pane's **Folder on the phone**, or
+the **Choose log folder** button on the phone's own screen) and the app keeps
+a copy of its log in `logs/andwebcam.log` inside it, growing over time and
 rotating at about a megabyte. A crash writes the stack trace and the log up to
 that moment as a `crash-*.txt` file in the same place, so even a bad update
 leaves a readable log in an ordinary folder, reachable by any file manager or
-FTP server on the phone.
+FTP server on the phone. The `logs` directory sits beside the recordings'
+`videos` directory; its name and place are not configurable.
 
 Choosing a folder uses the system picker once; the grant survives reboots.
 Clearing the folder stops the mirroring but leaves the files already written.
@@ -111,9 +112,9 @@ stream to the phone as MP4:
   so recording adds no work to the camera. Recording is part of the webcam
   being on: with streaming turned off the button is disabled, and switching
   streaming off ends a running recording.
-* Files are written to the `videos` folder next to the `andwebcam` log folder,
-  one file per recording, named `video-YYYYMMDD-HHMMSS.mp4` after the moment
-  it started.
+* Files are written to the storage folder's `videos` subfolder, one file per
+  recording, named `video-YYYYMMDD-HHMMSS.mp4` after the moment it started.
+  The storage folder is chosen once in the recording pane.
 * **Storage limit** is a percentage of the volume's free space. Older videos
   are deleted to stay under it, and a recording stops by itself when it
   reaches the limit. The pane shows how much room there is and how much the

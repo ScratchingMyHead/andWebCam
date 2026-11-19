@@ -77,6 +77,13 @@ object WebUi {
  .vrow button svg, .vrow a svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
  .vrow a { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:5px 9px; font-size:12px; text-decoration:none }
  .vrow a:hover { background:#3d3d3d }
+ .modal { position:fixed; inset:0; z-index:60; background:#000c; display:flex; align-items:center; justify-content:center; padding:16px }
+ .mbox { background:#1b1b1b; border-radius:8px; padding:14px 16px; max-width:520px; max-height:82vh; overflow:auto }
+ .mbox h2 { font-size:12px; text-transform:uppercase; letter-spacing:.06em; color:#8ab; margin:0 }
+ .mbox p { margin:9px 0 0; color:#bbb; font-size:12.5px }
+ .mbox p:first-of-type { margin-top:12px }
+ .mbox code { background:#0d0d0d; padding:2px 4px; border-radius:4px; font-size:11px; word-break:break-all }
+ .mbox a { color:#7cc4ff }
  #recPlay { width:100%; margin:9px 0 0; background:#000 }
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
@@ -195,19 +202,7 @@ object WebUi {
       </div>
       <button id="doUpdate">Update software</button>
       <p class="hint" id="updmsg">Installs without a cable. The page reloads by itself when the phone comes back.</p>
-      <p class="hint"><a href="/api/log?lines=2000" target="_blank" rel="noopener">Download the log</a>
-        &mdash; everything the app has written since the phone last booted.</p>
-
-      <h2>Log file</h2>
-      <div class="row">
-        <label>Folder on the phone</label>
-        <span id="v_folder" style="font-family:monospace">-</span>
-      </div>
-      <div class="actions">
-        <button id="doFolderPick" class="secondary">Choose folder</button>
-        <button id="doFolderClear" class="secondary">Clear</button>
-      </div>
-      <p class="hint" id="foldermsg">A copy of the log is kept in this folder, so it exists even if the app stops working. The picker opens on the phone's screen.</p>
+      <p class="hint"><a href="/api/log?lines=2000" target="_blank" rel="noopener">Download log</a></p>
     </div>
     <div class="panel hidden" id="recPane">
       <h2>Record</h2>
@@ -225,12 +220,22 @@ object WebUi {
         <input id="s_cap" type="number" min="1" max="100" step="1">
       </div>
       <p class="hint" id="recSpace">Free - · cap - · used -</p>
+      <div class="row">
+        <label>Folder on the phone</label>
+        <span id="v_folder" style="font-family:monospace">-</span>
+      </div>
+      <div class="actions">
+        <button id="doFolderPick" class="secondary">Choose folder</button>
+        <button id="doFolderClear" class="secondary">Clear</button>
+      </div>
+      <p class="hint" id="foldermsg">Recordings go into this folder's videos subfolder, and the log's copy into its logs subfolder. The picker opens on the phone's screen.</p>
 
       <h2>Videos</h2>
       <video id="recPlay" controls class="hidden"></video>
       <div id="recList">
         <p class="hint">Nothing recorded yet.</p>
       </div>
+      <p class="hint"><a href="#" id="dlHelp">Problems downloading?</a></p>
     </div>
     <div class="panel hidden" id="zonesPane">
       <h2>Zones</h2>
@@ -255,6 +260,21 @@ object WebUi {
   </div>
   <div class="foot" id="foot"></div>
 </main>
+<div class="modal hidden" id="dlHelpBox">
+  <div class="mbox">
+    <div class="actions">
+      <h2>Problems downloading?</h2>
+      <button id="dlHelpClose" class="paneClose" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <p>The phone serves HTTPS with a self-signed certificate. Browsing works because you accepted the warning, but Chrome refuses to download files over a connection it does not trust &mdash; the request is dropped before it ever reaches the phone. Trusting the certificate once fixes downloads everywhere, and the warning too.</p>
+    <p>1. <a href="/cert" download="andwebcam.crt">Download the certificate</a> (andwebcam.crt).</p>
+    <p>2. Install it:</p>
+    <p><b>Windows</b> &mdash; double-click the file, Install Certificate, Current User, "Place all certificates in the following store" &rarr; Trusted Root Certification Authorities, Finish, then restart Chrome.</p>
+    <p><b>macOS</b> &mdash; double-click the file to add it to the login keychain, open it there, Trust &rarr; Always Trust.</p>
+    <p><b>Linux</b> &mdash; Chrome keeps its own store: <code>certutil -d sql:${'$'}HOME/.pki/nssdb -A -t "C,," -n andwebcam -i andwebcam.crt</code> (from the libnss3-tools package), then restart Chrome.</p>
+    <p>Firefox downloads without any of this; to silence its warning, Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates &rarr; Authorities &rarr; Import.</p>
+  </div>
+</div>
 <script>
 function el(id) { return document.getElementById(id); }
 function post(path, obj) {
@@ -773,7 +793,7 @@ el('doFolderPick').onclick = function() {
   }).catch(function() { folderMsg('No answer from the phone.'); });
 };
 el('doFolderClear').onclick = function() {
-  if (!confirm('Stop mirroring the log to this folder? Files already written are left where they are.')) { return; }
+  if (!confirm('Stop using this folder? Recordings and the log\'s copy stop; files already written stay where they are.')) { return; }
   post('/api/folder/clear').then(function(r) {
     if (r.ok === false) { folderMsg('Not authorized'); return; }
     folderMsg('The folder was cleared.');
@@ -1039,6 +1059,13 @@ function recRefresh() {
   }).catch(function() {});
 }
 function recPollTick() { recRefresh(); }
+// Why a browser may refuse to download, and the one-time way out.
+el('dlHelp').onclick = function(e) {
+  e.preventDefault();
+  el('dlHelpBox').classList.remove('hidden');
+};
+el('dlHelpClose').onclick = function() { el('dlHelpBox').classList.add('hidden'); };
+el('dlHelpBox').onclick = function(e) { if (e.target === this) { this.classList.add('hidden'); } };
 el('recBtn').onclick = function() {
   var b = el('recBtn');
   if (b.disabled) { return; }

@@ -16,7 +16,8 @@ import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * The on-disk copy of the log, in a folder the user has chosen.
+ * The on-disk copy of the log, in the storage folder's own "logs"
+ * subdirectory.
  *
  * /api/log only works while a live process serves it: an update that crashes
  * before the server starts leaves nothing to download. The copy written here
@@ -25,14 +26,19 @@ import java.util.concurrent.atomic.AtomicBoolean
  * way - so even a bad update leaves a readable log in a folder any file
  * browser (or FTP server) on the phone can reach.
  *
- * The folder is granted once through the system document picker; the grant
- * survives reboots and the same grant is what video recording will use.
+ * The storage folder is granted once through the system document picker - it
+ * is where recordings go, so the pane asks for it - and the grant survives
+ * reboots. The log's place inside it is not configurable: always "logs",
+ * next to the recordings' "videos".
  */
 object LogFolder {
     private const val TAG = "andWebCam"
 
     /** The app writes into its own subdirectory, so the chosen folder stays tidy. */
-    private const val SUBDIR = "andwebcam"
+    private const val SUBDIR = "logs"
+
+    /** Where builds before the "logs" rename kept the same files. */
+    private const val OLD_SUBDIR = "andwebcam"
     private const val LOG_NAME = "andwebcam.log"
     private const val LOG_PREV = "andwebcam.log.1"
 
@@ -67,11 +73,11 @@ object LogFolder {
             Log.w(TAG, "cannot keep the folder grant: ${e.message}")
         }
         Prefs.logFolder = uri.toString()
-        Log.i(TAG, "log folder set: ${describe(ctx) ?: uri}")
+        Log.i(TAG, "storage folder set: ${describe(ctx) ?: uri}")
         mirror(ctx)
     }
 
-    /** Stop mirroring. The files already written are left where they are. */
+    /** Stop using the folder. The files already written are left where they are. */
     fun clear(ctx: Context) {
         tree?.let {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
@@ -81,7 +87,7 @@ object LogFolder {
             }
         }
         Prefs.logFolder = null
-        Log.i(TAG, "log folder cleared")
+        Log.i(TAG, "storage folder cleared")
     }
 
     /**
@@ -159,6 +165,7 @@ object LogFolder {
         if (newLines.isEmpty()) return
 
         val dir = Saf.ensureDir(cr, t, SUBDIR) ?: return
+        migrateOld(cr, t, dir)
         // The mime type must be */* and not text/plain: the provider insists
         // that a created file's extension matches its mime type, and would
         // otherwise rename .log to .log.txt. */* keeps the name intact.
@@ -184,6 +191,22 @@ object LogFolder {
         if (writeAll(cr, logDoc, toWrite)) {
             Prefs.lastMirrorLine = lines.last()
             Log.i(TAG, "mirrored ${newLines.size} lines to ${describe(ctx) ?: "the log folder"}")
+        }
+    }
+
+    /**
+     * Builds before the rename kept the same files in an "andwebcam"
+     * subfolder; carry them across once, so the history follows the log into
+     * its new place. Skipped as soon as the new log exists.
+     */
+    private fun migrateOld(cr: ContentResolver, t: Uri, dir: Uri) {
+        val oldDir = Saf.ensureDir(cr, t, OLD_SUBDIR) ?: return
+        for (name in arrayOf(LOG_NAME, LOG_PREV)) {
+            if (Saf.findDoc(cr, t, dir, name) != null) continue
+            val src = Saf.findDoc(cr, t, oldDir, name) ?: continue
+            val data = readAll(cr, src) ?: continue
+            val dst = Saf.findDoc(cr, t, dir, name) ?: Saf.createDoc(cr, dir, name, "*/*") ?: continue
+            writeAll(cr, dst, data)
         }
     }
 
