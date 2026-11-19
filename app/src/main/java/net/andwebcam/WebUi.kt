@@ -266,6 +266,8 @@ object WebUi {
     <p><code id="lCmd"></code></p>
     <p>Firefox downloads without trusting the cert but you can silence the warning at, Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates &rarr; Authorities &rarr; Import.</p>
     <p><button id="dlCertBtn" class="secondary">Download certificate</button></p>
+    <p>Videos can be downloaded with curl using the url obtained from the download button:</p>
+    <p><code>curl -k -u admin:PASSWORD -O https://andwebcam.local:8443/video/file/video-yyyymmdd-hhmmss.mp4</code></p>
   </div>
 </div>
 <script>
