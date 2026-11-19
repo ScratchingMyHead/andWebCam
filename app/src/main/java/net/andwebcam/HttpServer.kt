@@ -45,6 +45,16 @@ class HttpServer(
         fun reboot(): String?
 
         /**
+         * Opens the system folder picker on the phone's screen for the
+         * on-disk log copy. The pick is completed on the phone; this returns
+         * as soon as the picker has been launched. Null on success.
+         */
+        fun pickFolder(): String?
+
+        /** Removes the chosen log folder; files already written are kept. */
+        fun clearFolder()
+
+        /**
          * Validates an uploaded APK and copies it into an install session.
          * Returns null when it is staged and ready to commit, or a sentence
          * explaining why it was refused.
@@ -317,6 +327,23 @@ class HttpServer(
                         sessions.clear()
                         respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                     }
+                }
+            }
+
+            method == "POST" && path == "/api/folder/pick" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val err = host.pickFolder()
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(mapOf("ok" to (err == null), "error" to err)),
+                    )
+                }
+            }
+
+            method == "POST" && path == "/api/folder/clear" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    host.clearFolder()
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                 }
             }
 

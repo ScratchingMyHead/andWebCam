@@ -34,6 +34,8 @@ object Prefs {
     private const val KEY_UPDATE_NOTE = "update_note"
     private const val KEY_LAST_START = "last_start"
     private const val KEY_CLEAN_EXIT = "clean_exit"
+    private const val KEY_LOG_FOLDER = "log_folder"
+    private const val KEY_LAST_MIRROR_LINE = "last_mirror_line"
 
     private const val KEY_ADMIN_USER = "admin_user"
     private const val KEY_PASS_PLAIN = "pass_plain"
@@ -155,6 +157,30 @@ object Prefs {
     var batteryPromptAsked: Boolean
         get() = sp.getBoolean(KEY_BATTERY_ASKED, false)
         set(v) = edit { putBoolean(KEY_BATTERY_ASKED, v) }
+
+    /**
+     * The folder (a SAF tree URI) that holds the on-disk copy of the log, or
+     * null while none has been chosen. The grant survives reboots; the lines
+     * already copied are remembered in [lastMirrorLine].
+     */
+    var logFolder: String?
+        get() = sp.getString(KEY_LOG_FOLDER, null)
+        set(v) {
+            if (v == null) edit { remove(KEY_LOG_FOLDER); remove(KEY_LAST_MIRROR_LINE) }
+            else edit { putString(KEY_LOG_FOLDER, v) }
+        }
+
+    /**
+     * The last log line already copied to the on-disk file: the next mirror
+     * appends the lines that come after it, so consecutive runs grow the same
+     * file instead of duplicating it.
+     */
+    var lastMirrorLine: String?
+        get() = sp.getString(KEY_LAST_MIRROR_LINE, null)
+        set(v) {
+            if (v == null) edit { remove(KEY_LAST_MIRROR_LINE) }
+            else edit { putString(KEY_LAST_MIRROR_LINE, v.take(512)) }
+        }
 
     // ---- admin credentials ------------------------------------------------
 

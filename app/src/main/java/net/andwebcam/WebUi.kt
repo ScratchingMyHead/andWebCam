@@ -186,6 +186,17 @@ object WebUi {
       <p class="hint" id="updmsg">Installs without a cable. The page reloads by itself when the phone comes back.</p>
       <p class="hint"><a href="/api/log?lines=2000" target="_blank" rel="noopener">Download the log</a>
         &mdash; everything the app has written since the phone last booted.</p>
+
+      <h2>Log file</h2>
+      <div class="row">
+        <label>Folder on the phone</label>
+        <span id="v_folder" style="font-family:monospace">-</span>
+      </div>
+      <div class="actions">
+        <button id="doFolderPick" class="secondary">Choose folder</button>
+        <button id="doFolderClear" class="secondary">Clear</button>
+      </div>
+      <p class="hint" id="foldermsg">A copy of the log is kept in this folder, so it exists even if the app stops working. The picker opens on the phone's screen.</p>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
@@ -473,6 +484,8 @@ function refresh() {
     }
 
     el('foot').textContent = 'andWebCam ' + (s.version || '?') + (s.build ? ' · ' + s.build : '');
+    el('v_folder').textContent = s.logFolder || 'not chosen';
+    el('doFolderClear').classList.toggle('hidden', !s.logFolder);
     el('loginBtn').classList.toggle('hidden', !!s.admin);
     el('logoutBtn').classList.toggle('hidden', !s.admin);
     // View-only users may save a frame too: the server already allows them.
@@ -705,6 +718,26 @@ el('doUpdate').onclick = function() {
       updateBusy = false; b.disabled = false; b.textContent = 'Update software';
       updateMsg('The upload did not finish. Check that the phone is still reachable.');
     });
+};
+// The on-disk copy of the log. The system picker opens on the phone's
+// screen, so the choice is completed there (e.g. over VNC); the page
+// re-polls and shows the folder once it has been made.
+function folderMsg(t) { el('foldermsg').textContent = t; }
+el('doFolderPick').onclick = function() {
+  post('/api/folder/pick').then(function(r) {
+    if (r.ok === false) { folderMsg('Not authorized'); return; }
+    if (r.error) { folderMsg(r.error); return; }
+    folderMsg('The folder picker opened on the phone. Choose a folder there; it will show up here.');
+    setTimeout(refresh, 5000);
+  }).catch(function() { folderMsg('No answer from the phone.'); });
+};
+el('doFolderClear').onclick = function() {
+  if (!confirm('Stop mirroring the log to this folder? Files already written are left where they are.')) { return; }
+  post('/api/folder/clear').then(function(r) {
+    if (r.ok === false) { folderMsg('Not authorized'); return; }
+    folderMsg('The folder was cleared.');
+    setTimeout(refresh, 500);
+  }).catch(function() { folderMsg('No answer from the phone.'); });
 };
 // The settings pane can be hidden so the video fills the window; the choice is remembered.
 function panePref(v) {

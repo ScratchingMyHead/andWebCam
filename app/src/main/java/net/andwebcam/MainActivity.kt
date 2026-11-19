@@ -33,6 +33,7 @@ import android.widget.TextView
 class MainActivity : Activity() {
     private companion object {
         const val REQ_PERMISSIONS = 1
+        const val REQ_FOLDER = 2
     }
 
     private val handler = Handler(Looper.getMainLooper())
@@ -49,6 +50,13 @@ class MainActivity : Activity() {
     private lateinit var errorView: TextView
     private lateinit var batteryRow: Button
     private lateinit var batteryHint: TextView
+    private lateinit var folderValue: TextView
+    private lateinit var folderRow: Button
+    private lateinit var folderClear: Button
+    /** The folder the displayed name was looked up for, so the one-per-second
+     *  repaint does not ask the document provider each time. */
+    private var folderShownFor: String? = null
+    private var folderShown: String? = null
     private lateinit var ownerRow: View
     private lateinit var ownerMsg: TextView
     private var fingerprint = ""
@@ -117,6 +125,38 @@ class MainActivity : Activity() {
         } else {
             requestPermissions(needed.toTypedArray(), REQ_PERMISSIONS)
         }
+    }
+
+    override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
+        super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == REQ_FOLDER && resultCode == RESULT_OK) {
+            data?.data?.let { LogFolder.onPick(this, it) }
+            update()
+        }
+    }
+
+    /** The one-time folder pick; the grant is kept and survives reboots. */
+    private fun pickFolder() {
+        try {
+            startActivityForResult(LogFolder.pickIntent(), REQ_FOLDER)
+        } catch (e: Exception) {
+            folderValue.text = "No folder picker on this phone: ${e.message}"
+        }
+    }
+
+    private fun confirmClearFolder() {
+        AlertDialog.Builder(this)
+            .setTitle("Clear the log folder?")
+            .setMessage(
+                "andWebCam stops copying its log there. The files already written " +
+                    "are left where they are, and choosing again starts a fresh log."
+            )
+            .setNegativeButton("Cancel", null)
+            .setPositiveButton("Clear") { _, _ ->
+                LogFolder.clear(this)
+                update()
+            }
+            .show()
     }
 
     /**
@@ -231,6 +271,16 @@ class MainActivity : Activity() {
             ?.isIgnoringBatteryOptimizations(packageName) == true
         batteryRow.visibility = shown(enabled && !exempt)
         batteryHint.visibility = batteryRow.visibility
+
+        val picked = Prefs.logFolder
+        if (picked != folderShownFor) {
+            folderShown = LogFolder.describe(this)
+            folderShownFor = picked
+        }
+        folderValue.text = if (picked == null) "No log folder chosen"
+        else "Log folder: ${folderShown ?: "chosen"}"
+        folderRow.visibility = shown(enabled)
+        folderClear.visibility = shown(enabled && picked != null)
     }
 
     private fun shown(on: Boolean): Int = if (on) View.VISIBLE else View.GONE
@@ -329,6 +379,22 @@ class MainActivity : Activity() {
         root.addView(batteryRow)
         batteryHint = text("Battery optimisation is on, so the phone may drop off the network while it sleeps.", 13f)
         root.addView(batteryHint)
+        root.addView(spacer())
+
+        // The one-time folder pick that holds the on-disk copy of the log; it
+        // is the same grant video recording will use later.
+        folderValue = text("", 13f)
+        root.addView(folderValue)
+        folderRow = Button(this).apply {
+            text = "Choose log folder"
+            setOnClickListener { pickFolder() }
+        }
+        root.addView(folderRow)
+        folderClear = Button(this).apply {
+            text = "Clear log folder"
+            setOnClickListener { confirmClearFolder() }
+        }
+        root.addView(folderClear)
         root.addView(spacer())
 
         errorView = text("", 13f)

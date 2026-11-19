@@ -37,12 +37,32 @@ object Logs {
         if (!all) sb.append(" - andWebCam lines only; add ?all=1 for everything")
         sb.append('\n').append("---\n")
 
-        // The whole buffer on purpose: with -t the window is the newest lines
-        // of the *device* log, and a quiet app's own lines fall outside it
-        // within seconds. The uid filter above keeps this to our own entries,
-        // so it is a few thousand lines even on a phone that has been up for
-        // days.
-        val kept = ArrayDeque<String>(lines)
+        val kept = collect(all, lines)
+        if (kept == null) {
+            return sb.append("could not read the log; see the app's log for the error\n").toString()
+        }
+
+        for (line in kept) {
+            if (sb.length + line.length > MAX_CHARS) {
+                sb.append("... (truncated; ask for fewer lines)\n")
+                break
+            }
+            sb.append(line).append('\n')
+        }
+        return sb.toString()
+    }
+
+    /**
+     * The newest [limit] lines this process owns, oldest first; null when the
+     * log could not be read.
+     *
+     * The whole buffer is read on purpose: with -t the window is the newest
+     * lines of the *device* log, and a quiet app's own lines fall outside it
+     * within seconds. The uid filter above keeps this to our own entries, so
+     * it is a few thousand lines even on a phone that has been up for days.
+     */
+    private fun collect(all: Boolean, limit: Int): List<String>? {
+        val kept = ArrayDeque<String>(limit)
 
         var p: Process? = null
         try {
@@ -57,26 +77,21 @@ object Logs {
                     if (line.contains("TrafficStats: tagSocket")) continue
                     if (!all && !interesting(line)) continue
                     kept.addLast(line)
-                    if (kept.size > lines) kept.removeFirst()
+                    if (kept.size > limit) kept.removeFirst()
                 }
             }
             p.waitFor(5, TimeUnit.SECONDS)
         } catch (e: Exception) {
             Log.w(TAG, "log dump failed: ${e.message}")
-            return sb.append("could not read the log: ").append(e.message).append('\n').toString()
+            return null
         } finally {
             try { p?.destroy() } catch (_: Exception) {}
         }
-
-        for (line in kept) {
-            if (sb.length + line.length > MAX_CHARS) {
-                sb.append("... (truncated; ask for fewer lines)\n")
-                break
-            }
-            sb.append(line).append('\n')
-        }
-        return sb.toString()
+        return kept.toList()
     }
+
+    /** The whole filtered buffer, newest last: what the on-disk copy appends from. */
+    fun allLines(): List<String> = collect(false, 100_000) ?: emptyList()
 
     /** `11-18 22:34:53.202 17479 17479 I net.andwebcam: ...` */
     private val entry = Regex("""^\d\d-\d\d \d\d:\d\d:\d\d\.\d+\s+\d+\s+\d+\s+[VDIWEF]\s+([^:]*):""")

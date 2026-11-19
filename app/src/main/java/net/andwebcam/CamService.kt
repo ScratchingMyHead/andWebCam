@@ -196,6 +196,7 @@ class CamService : Service(), HttpServer.Host {
         startNetworking()
         watchNetwork()
         scheduleMaintenance()
+        LogFolder.mirror(this)   // also picks up the lines a previous run left
 
         if (!camera.hasPermission()) {
             State.lastError = "Camera permission not granted. Allow the camera for andWebCam in the phone's app settings."
@@ -366,6 +367,8 @@ class CamService : Service(), HttpServer.Host {
             askWifiToReconnect(wm)
         }
         refreshNetwork()
+        // The alarm that woke us doubles as the log mirror's clock.
+        LogFolder.mirror(this)
     }
 
     @Suppress("DEPRECATION")
@@ -430,6 +433,7 @@ class CamService : Service(), HttpServer.Host {
         State.running = false
         started = false
         Prefs.cleanExit = true
+        LogFolder.mirrorNow(this)   // the last chance to finish the file
         mainHandler.removeCallbacks(cameraRetry)
         mainHandler.removeCallbacks(idleStop)
         mainHandler.removeCallbacks(refreshNet)
@@ -474,6 +478,9 @@ class CamService : Service(), HttpServer.Host {
             "cameraActive" to camera.active,
             "autoStartStreaming" to Prefs.autoStartStreaming,
             "lastError" to State.lastError,
+            // The folder holding the on-disk copy of the log; null while none
+            // has been chosen. The page shows it and offers the picker.
+            "logFolder" to LogFolder.describe(this),
             "version" to BuildConfig.VERSION_NAME,
             "build" to BuildConfig.BUILD_ID,
             // Restarting needs device owner; the page hides the button without it.
@@ -601,6 +608,25 @@ class CamService : Service(), HttpServer.Host {
         Prefs.cleanExit = true       // the process is about to be replaced on purpose
         Prefs.updateNote = if (err == null) "Installing ${s.label}..." else "Update failed: $err"
         return err
+    }
+
+    /**
+     * Starts the picker on the phone's screen. The service cannot ask for an
+     * activity result itself, so the invisible stand-in does it and keeps the
+     * answer.
+     */
+    override fun pickFolder(): String? = try {
+        startActivity(
+            Intent(this, FolderPickActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+        )
+        null
+    } catch (e: Exception) {
+        "Could not open the folder picker: ${e.message}"
+    }
+
+    override fun clearFolder() {
+        LogFolder.clear(this)
     }
 
     override fun reboot(): String? {

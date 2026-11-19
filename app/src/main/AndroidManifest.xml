@@ -35,6 +35,13 @@
             </intent-filter>
         </activity>
 
+        <!-- Invisible stand-in that lets the service launch the folder picker
+             and keep its result. -->
+        <activity
+            android:name=".FolderPickActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar" />
+
         <service
             android:name=".CamService"
             android:exported="false"

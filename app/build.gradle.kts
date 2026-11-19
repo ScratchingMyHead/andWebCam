@@ -48,8 +48,8 @@ android {
         applicationId = "net.andwebcam"
         minSdk = 28
         targetSdk = 34
-        versionCode = 4
-        versionName = "1.3"
+        versionCode = 10
+        versionName = "1.4"
         buildConfigField("String", "BUILD_ID", "\"$buildId\"")
     }
 

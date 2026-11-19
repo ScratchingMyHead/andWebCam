@@ -86,6 +86,21 @@ messages, its crash traces and the system's record of it being started or
 killed. That works the same on a release build, so a remote phone can explain
 itself without a debug build or a cable.
 
+## A log file on the phone
+
+The log above only exists while a running app serves it. If an update crashes
+before the app answers, there is nothing left to read. To cover that, choose a
+folder on the phone (the **Log file** section of the settings pane, or the
+**Choose log folder** button on the phone's own screen) and the app keeps a
+copy of its log in `andwebcam/andwebcam.log` inside it, growing over time and
+rotating at about a megabyte. A crash writes the stack trace and the log up to
+that moment as a `crash-*.txt` file in the same place, so even a bad update
+leaves a readable log in an ordinary folder, reachable by any file manager or
+FTP server on the phone.
+
+Choosing a folder uses the system picker once; the grant survives reboots.
+Clearing the folder stops the mirroring but leaves the files already written.
+
 ## Consuming it on a PC
 
 `/video` needs the login unless anonymous view-only access is on, so the
