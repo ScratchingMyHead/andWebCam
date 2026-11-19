@@ -621,29 +621,6 @@ class CamService : Service(), HttpServer.Host {
         return null
     }
 
-    // ---- screen on / black overlay --------------------------------------
-
-    /**
-     * Turn the display on by bringing up the black overlay activity, which
-     * uses FLAG_TURN_SCREEN_ON. The overlay keeps the screen on and dismisses
-     * on a tap, revealing whatever is behind it.
-     */
-    override fun wakeScreen() {
-        Log.i(TAG, "wake screen requested from web UI")
-        try {
-            val i = Intent(this, BlackScreenActivity::class.java).apply {
-                addFlags(
-                    Intent.FLAG_ACTIVITY_NEW_TASK or
-                        Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                        Intent.FLAG_ACTIVITY_SINGLE_TOP
-                )
-            }
-            startActivity(i)
-        } catch (e: Exception) {
-            Log.w(TAG, "cannot wake screen: ${e.message}")
-        }
-    }
-
     /**
      * The radio is kept out of power save for as long as the service runs, not
      * only while somebody is watching. It is the radio, not the CPU, that has

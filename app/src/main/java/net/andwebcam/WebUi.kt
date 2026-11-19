@@ -186,8 +186,6 @@ object WebUi {
       <p class="hint" id="updmsg">Installs without a cable. The page reloads by itself when the phone comes back.</p>
       <p class="hint"><a href="/api/log?lines=2000" target="_blank" rel="noopener">Download the log</a>
         &mdash; everything the app has written since the phone last booted.</p>
-      <button id="doWake">Wake screen</button>
-      <p class="hint" id="wakemsg">Brings the display on so a VNC viewer can connect.</p>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
@@ -707,16 +705,6 @@ el('doUpdate').onclick = function() {
       updateBusy = false; b.disabled = false; b.textContent = 'Update software';
       updateMsg('The upload did not finish. Check that the phone is still reachable.');
     });
-};
-// Wake screen. Turns the display on so a VNC viewer can connect; the phone
-// shows a full-screen black form which the user taps away.
-el('doWake').onclick = function() {
-  fetch('/api/wake', { method: 'POST' }).then(function(r) { return r.json(); })
-    .then(function(r) {
-      if (r.ok) { updateMsg('Screen waking up.'); }
-      else { updateMsg('Could not wake screen: ' + (r.error || 'unknown error')); }
-    })
-    .catch(function() { updateMsg('No answer from the phone.'); });
 };
 // The settings pane can be hidden so the video fills the window; the choice is remembered.
 function panePref(v) {

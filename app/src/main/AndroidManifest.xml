@@ -35,13 +35,6 @@
             </intent-filter>
         </activity>
 
-        <!-- Full-screen black overlay that keeps the display on while idle.
-             Started by the service with FLAG_ACTIVITY_NEW_TASK. -->
-        <activity
-            android:name=".BlackScreenActivity"
-            android:exported="false"
-            android:theme="@android:style/Theme.DeviceDefault.NoActionBar" />
-
         <service
             android:name=".CamService"
             android:exported="false"
