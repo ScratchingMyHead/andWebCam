@@ -107,9 +107,10 @@ The **Recording** pane (the round button in the page's corner) records the
 stream to the phone as MP4:
 
 * **Record** starts a file and **Stop** finishes it. The ten seconds before
-  the press are included, and only while the camera is already running — the
-  phone keeps the frames it was streaming anyway, so recording adds no work
-  to the camera.
+  the press are included — the phone keeps the frames it was streaming anyway,
+  so recording adds no work to the camera. Recording is part of the webcam
+  being on: with streaming turned off the button is disabled, and switching
+  streaming off ends a running recording.
 * Files are written to the `videos` folder next to the `andwebcam` log folder,
   one file per recording, named `video-YYYYMMDD-HHMMSS.mp4` after the moment
   it started.

@@ -456,9 +456,10 @@ class CamService : Service(), HttpServer.Host {
         } else {
             hub.disconnectAll()
             mainHandler.removeCallbacks(idleStop)
-            // A recording keeps the camera open even with streaming stopped.
-            if (!recorder.recording) closeCamera()
-            else mainHandler.postDelayed(idleStop, 5000)
+            // The webcam is off, so it stops recording too; the file is
+            // finished first, and the camera closes when that is done.
+            if (recorder.recording) recorder.stop()
+            else closeCamera()
         }
         updateNotification()
     }
@@ -675,6 +676,10 @@ class CamService : Service(), HttpServer.Host {
 
     override fun startRecording(): String? {
         if (recorder.recording) return null
+        // Recording is part of the webcam being on: with streaming disabled
+        // the phone is meant to be idle, so it does not open the camera for
+        // a file either.
+        if (!streamingEnabled) return "Streaming is off. Turn it on to record."
         // Frames come from the camera; a session that starts with it closed
         // would just fill the file with silence, so open it first.
         camera.start()

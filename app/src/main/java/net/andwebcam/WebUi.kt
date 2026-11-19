@@ -212,15 +212,16 @@ object WebUi {
         <button id="recPaneClose" class="paneClose" title="Hide the recording pane" aria-label="Hide the recording pane">&raquo;</button>
       </div>
       <p class="err hidden" id="recMsg"></p>
+      <p class="hint hidden" id="recOff">Streaming is off, so the phone is not recording anything. Turn it on in the settings pane to record.</p>
       <p class="hint hidden" id="recNote"></p>
-      <p class="hint">A recording starts with the last 10 seconds of the stream and ends when it is stopped, or when the storage cap is reached.</p>
+      <p class="hint">Recording includes 10 second buffer</p>
 
       <h2>Storage</h2>
       <div class="row">
         <label>Cap, percent of free space: <span id="v_capv">10</span></label>
         <input id="s_cap" type="number" min="1" max="100" step="1">
       </div>
-      <p class="hint" id="recSpace">The oldest videos are deleted first as the total approaches the cap.</p>
+      <p class="hint" id="recSpace">Free - · cap - · used -</p>
 
       <h2>Videos</h2>
       <video id="recPlay" controls class="hidden"></video>
@@ -868,6 +869,21 @@ function recFmtSize(b) {
   if (b < 1024 * 1024) { return (b / 1024).toFixed(1) + ' KB'; }
   return (b / 1024 / 1024).toFixed(1) + ' MB';
 }
+// Whole megabytes with thousands separators, the way a person reads them.
+function recMB(b) {
+  if (b == null || b === undefined || isNaN(b)) { return '-'; }
+  return group(Math.round(b / 1048576));
+}
+// One decimal place, still grouped: "1,234.5".
+function recMB1(b) {
+  if (b == null || b === undefined || isNaN(b)) { return '-'; }
+  var s = (Math.round(b / 104857.6) / 10).toFixed(1);
+  var p = s.split('.');
+  return group(parseInt(p[0], 10)) + '.' + p[1];
+}
+function group(n) {
+  return String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+}
 function recFmtDur(s) {
   if (!s || s <= 0) { return ''; }
   s = Math.round(s);
@@ -906,19 +922,20 @@ function recRefresh() {
     if (!btn.disabled) {
       btn.textContent = d.recording ? 'Stop recording' : 'Record';
     }
-    // Without a folder there is nowhere to write, and a session started with
-    // no frames would just end up empty.
-    btn.disabled = !window.S.logFolder;
-    // The note is the last thing the recorder said; show it once, not on
-    // every poll.
+    // Without a folder there is nowhere to write, and with streaming off the
+    // phone is meant to be idle: both stop a session before it starts.
+    var canRecord = !!window.S.logFolder && !!window.S.streaming;
+    btn.disabled = !canRecord && !d.recording;
+    el('recOff').classList.toggle('hidden', !!window.S.streaming);
     if (d.note && d.note !== recNoteSeen) { recNoteSeen = d.note; recMsg(d.note); }
     if (document.activeElement !== el('s_cap')) { el('s_cap').value = d.capPercent || 10; }
     el('v_capv').textContent = d.capPercent || 10;
     el('s_cap').disabled = !!d.recording;
     el('recSpace').textContent = d.free == null
-      ? 'The space of this folder cannot be measured, so the cap does not apply.'
-      : 'Free ' + recFmtSize(d.free) + ' · cap ' + recFmtSize(d.cap) + ' · used ' + recFmtSize(d.used) +
-        ' of the ' + (d.capPercent || 0) + ' percent. The oldest videos go first.';
+      ? 'Free - · cap - · used - (the space of this folder cannot be measured)'
+      : 'Free ' + recMB(d.free) + ' MB · cap ' + recMB(d.cap) + ' MB · used ' +
+        recMB1(d.used) + ' MB (' +
+        (d.cap ? ((d.used || 0) / d.cap * 100).toFixed(1) : '0.0') + '%)';
     var list = el('recList');
     list.innerHTML = '';
     var vids = d.videos || [];
@@ -929,7 +946,8 @@ function recRefresh() {
       list.appendChild(p);
       return;
     }
-    vids.forEach(function(v) {
+    // Newest first: the one just recorded is the one being looked for.
+    vids.slice().reverse().forEach(function(v) {
       var row = document.createElement('div');
       row.className = 'vrow';
       var name = document.createElement('span');
