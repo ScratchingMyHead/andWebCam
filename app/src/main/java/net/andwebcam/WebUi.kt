@@ -266,14 +266,15 @@ object WebUi {
       <h2>Problems downloading?</h2>
       <button id="dlHelpClose" class="paneClose" title="Close" aria-label="Close">&times;</button>
     </div>
-    <p>The phone serves HTTPS with a self-signed certificate. Browsing works because you accepted the warning, but Chrome drops download requests at the door &mdash; they never reach the phone. Trusting the certificate once fixes downloads everywhere, and the warning too.</p>
-    <p><button id="dlCertBtn" class="secondary">Download the certificate</button> &mdash; saved as andwebcam.crt through this page's own connection, which your browser already allows.</p>
-    <p>Then tell your system to trust it. One line per system (curl is built into Windows 10+ and macOS):</p>
-    <p><b>Windows</b> &mdash; <code id="wCmd"></code></p>
-    <p><b>macOS</b> &mdash; <code id="mCmd"></code> (asks for your password).</p>
-    <p><b>Linux</b> &mdash; <code id="lCmd"></code> (certutil comes from the libnss3-tools package; restart Chrome afterwards).</p>
-    <p>One catch: the certificate is issued to the phone's name, so browse by that name &mdash; <b>https://<span id="certName"></span></b> &mdash; not the bare IP. Chrome checks the name even for a trusted certificate.</p>
-    <p>Firefox downloads without any of this; to silence its warning, Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates &rarr; Authorities &rarr; Import.</p>
+    <p>The phone serves HTTPS with a self-signed certificate. Browsing works because you accepted the warning, but downloads do not work in some browsers unless you trust the certificate.</p>
+    <p>Windows:</p>
+    <p><code id="wCmd"></code></p>
+    <p>macOS:</p>
+    <p><code id="mCmd"></code></p>
+    <p>Linux:</p>
+    <p><code id="lCmd"></code></p>
+    <p>Firefox downloads without trusting the cert but you can silence the warning at, Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates &rarr; Authorities &rarr; Import.</p>
+    <p><button id="dlCertBtn" class="secondary">Download certificate</button></p>
   </div>
 </div>
 <script>
@@ -1076,7 +1077,6 @@ el('dlHelpBox').onclick = function(e) { if (e.target === this) { this.classList.
   el('wCmd').textContent = 'curl -k -o andwebcam.crt ' + url + ' && certutil -addstore -user Root andwebcam.crt';
   el('mCmd').textContent = 'curl -k -o andwebcam.crt ' + url + ' && security add-trusted-cert -r trustRoot andwebcam.crt';
   el('lCmd').textContent = 'curl -k ' + url + ' | certutil -d sql:${'$'}HOME/.pki/nssdb -A -t "C,," -n andwebcam';
-  el('certName').textContent = (window.S && window.S.serviceName ? window.S.serviceName : location.hostname) + '.local:' + location.port;
 })();
 el('dlCertBtn').onclick = function() {
   fetch('/cert').then(function(r) { return r.blob(); }).then(function(b) {
