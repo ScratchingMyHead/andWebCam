@@ -87,7 +87,9 @@ object WebUi {
     <button data-scale="1" title="Actual size, 1:1 (drag to pan)">1:1</button>
   </span>
   <button id="paneToggle" class="iconbtn hidden" title="Hide the settings pane" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
-  <button id="logoutBtn" class="iconbtn hidden" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
+  <button id="recPaneToggle" class="iconbtn hidden" title="Show the recording pane" aria-label="Recording"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="currentColor" stroke="none"/></svg></button>
+<button id="zonesPaneToggle" class="iconbtn hidden" title="Show the zones pane" aria-label="Zones"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 3.5 19.8 7.75 19.8 16.25 12 20.5 4.2 16.25 4.2 7.75"/></svg></button>
+<button id="logoutBtn" class="iconbtn hidden" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
   <button id="loginBtn" class="iconbtn" title="Log in" aria-label="Log in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></button>
 </header>
 <main>
@@ -197,6 +199,20 @@ object WebUi {
         <button id="doFolderClear" class="secondary">Clear</button>
       </div>
       <p class="hint" id="foldermsg">A copy of the log is kept in this folder, so it exists even if the app stops working. The picker opens on the phone's screen.</p>
+    </div>
+    <div class="panel hidden" id="recPane">
+      <h2>Recording</h2>
+      <div class="actions">
+        <button id="recPaneClose" class="paneClose" title="Hide the recording pane" aria-label="Hide the recording pane">&raquo;</button>
+      </div>
+      <p class="hint">The record button and the list of recorded videos will appear here.</p>
+    </div>
+    <div class="panel hidden" id="zonesPane">
+      <h2>Zones</h2>
+      <div class="actions">
+        <button id="zonesPaneClose" class="paneClose" title="Hide the zones pane" aria-label="Hide the zones pane">&raquo;</button>
+      </div>
+      <p class="hint">Motion zones will appear here.</p>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
@@ -739,29 +755,48 @@ el('doFolderClear').onclick = function() {
     setTimeout(refresh, 500);
   }).catch(function() { folderMsg('No answer from the phone.'); });
 };
-// The settings pane can be hidden so the video fills the window; the choice is remembered.
+// The panes share one slot next to the video: opening one closes the others
+// and the choice is remembered, so the video can fill the window.
+var PANES = { paneToggle: 'settings', recPaneToggle: 'recording', zonesPaneToggle: 'zones' };
+var PANE_TITLES = { settings: 'the settings pane', recording: 'the recording pane', zones: 'the zones pane' };
 function panePref(v) {
   try {
-    if (v === undefined) { return localStorage.getItem('awcPane'); }
+    if (v === undefined) {
+      var p = localStorage.getItem('awcPane');
+      return p === 'shown' || p === null ? 'settings' : p; // 'shown' predates the other panes
+    }
     localStorage.setItem('awcPane', v);
   } catch (e) {}
-  return null;
+  return 'settings';
 }
 function applyPane() {
   var admin = !!(window.S && window.S.admin);
-  var hidden = panePref() === 'hidden';
-  el('admin').classList.toggle('hidden', hidden || !admin);
-  var t = el('paneToggle');
-  t.classList.toggle('hidden', !admin);
-  t.title = hidden ? 'Show the settings pane' : 'Hide the settings pane';
-  t.setAttribute('aria-expanded', hidden ? 'false' : 'true');
+  var open = panePref();
+  for (var btn in PANES) {
+    var p = PANES[btn];
+    var b = el(btn);
+    b.classList.toggle('hidden', !admin);
+    var isOpen = admin && open === p;
+    b.title = (isOpen ? 'Hide ' : 'Show ') + PANE_TITLES[p];
+    b.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  }
+  el('admin').classList.toggle('hidden', !(admin && open === 'settings'));
+  el('recPane').classList.toggle('hidden', !(admin && open === 'recording'));
+  el('zonesPane').classList.toggle('hidden', !(admin && open === 'zones'));
   updatePan();
 }
-el('paneToggle').onclick = function() {
-  panePref(panePref() === 'hidden' ? 'shown' : 'hidden');
+function openPane(which) {
+  // The button of the pane that is open hides it; any other button switches.
+  panePref(panePref() === which ? 'hidden' : which);
+  applyPane();
+}
+el('paneToggle').onclick = function() { openPane('settings'); };
+el('recPaneToggle').onclick = function() { openPane('recording'); };
+el('zonesPaneToggle').onclick = function() { openPane('zones'); };
+el('paneClose').onclick = el('recPaneClose').onclick = el('zonesPaneClose').onclick = function() {
+  panePref('hidden');
   applyPane();
 };
-el('paneClose').onclick = el('paneToggle').onclick;
 el('loginBtn').onclick = function() { el('loginForm').classList.toggle('hidden'); };
 el('logoutBtn').onclick = function() { post('/api/logout', {}).then(function() { location.reload(); }); };
 function doLogin() {
