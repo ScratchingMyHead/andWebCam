@@ -164,12 +164,15 @@ certificate at all.
 
 ## Notes / quirks
 
-* The TLS key and certificate are generated on the phone the first time the
-  service starts and kept in the app's private files. The certificate is
-  self-signed and `CA:FALSE`: browsers have no authority to check it against,
-  so they warn, and the only proof that you are talking to this phone is the
-  SHA-256 fingerprint on the app's screen matching the one the browser shows.
-  It is regenerated if the hostname changes or after ten years.
+* The TLS identity is generated on the phone the first time the service
+  starts and kept in the app's private files: a small self-signed root
+  authority, and the server certificate it signs (presented as a chain).
+  Browsers have no authority to check the root against, so they warn, and
+  the only proof that you are talking to this phone is the SHA-256
+  fingerprint on the app's screen matching the one the browser shows. The
+  root is what `/cert` serves: trust it once on a computer and the warning
+  and the download refusals both stop. A fresh identity is generated if the
+  hostname changes or after ten years.
 * Orientation is applied as the JPEG's EXIF orientation, which browsers and
   ffmpeg honour without any transcoding cost on the phone.
 * While somebody is watching, the service holds a partial wake lock so the CPU

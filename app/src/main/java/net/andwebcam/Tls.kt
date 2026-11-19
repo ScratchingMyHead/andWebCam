@@ -25,18 +25,21 @@ import javax.net.ssl.SSLContext
 /**
  * The phone's TLS identity.
  *
- * The key is generated on the device the first time it is needed and kept in
- * the app's private files, and the certificate that goes with it is signed by
- * that key alone. Every install therefore has its own identity, and no key
- * material is ever in the APK or the repository, so a stolen copy of the source
+ * The keys are generated on the device the first time they are needed and
+ * kept in the app's private files. A small self-signed root authority is
+ * created with them, and it signs the server certificate; the handshake
+ * presents both, and /cert serves the root. A root is what trust stores are
+ * built to accept - a self-signed leaf imported into one reads as invalid
+ * rather than trusted - so this is what makes certificate warnings fixable
+ * at all. Every install therefore has its own identity, and no key material
+ * is ever in the APK or the repository, so a stolen copy of the source
  * cannot be used to impersonate this phone.
  *
- * It is a self-signed leaf (CA:FALSE), not an authority, so browsers show their
- * warning and ask you to make an exception. The point is that the fingerprint
- * on the app's screen identifies this install: compare it with the one the
- * browser shows, and you know the certificate came from this phone.
+ * The fingerprint on the app's screen is the server certificate's: it is the
+ * one a browser shows, and comparing the two tells you the certificate came
+ * from this phone.
  *
- * No BouncyCastle: the certificate is DER built here and signed with the
+ * No BouncyCastle: the certificates are DER built here and signed with the
  * platform's own SHA256withECDSA.
  */
 object Tls {
@@ -44,16 +47,26 @@ object Tls {
     private const val DIR = "tls"
     private const val CERT = "server.crt"
     private const val KEY = "server.key.pk8"
+    private const val CA_CERT = "root.crt"
     private const val DAYS = 3650L
 
-    private class Identity(val cert: X509Certificate, val key: PrivateKey, val pem: ByteArray)
+    private class Identity(
+        val cert: X509Certificate,
+        val ca: X509Certificate,
+        val key: PrivateKey,
+        val pem: ByteArray,
+        val caPem: ByteArray,
+    )
 
     private var loaded: Identity? = null
 
     fun serverCert(ctx: Context): X509Certificate = identity(ctx).cert
 
-    /** PEM as served by /cert, so a client can pin or trust it out of band. */
-    fun certPem(ctx: Context): ByteArray = identity(ctx).pem
+    /**
+     * PEM as served by /cert: the root certificate, the one a client imports
+     * to trust everything this phone signs.
+     */
+    fun certPem(ctx: Context): ByteArray = identity(ctx).caPem
 
     /** Colon-separated SHA-256 fingerprint, for telling the user what to trust. */
     fun fingerprint(ctx: Context): String {
@@ -65,7 +78,7 @@ object Tls {
         val id = identity(ctx)
         val ks = KeyStore.getInstance("PKCS12")
         ks.load(null, null)
-        ks.setKeyEntry("server", id.key, STORE_PASS.toCharArray(), arrayOf(id.cert))
+        ks.setKeyEntry("server", id.key, STORE_PASS.toCharArray(), arrayOf(id.cert, id.ca))
 
         val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
         kmf.init(ks, STORE_PASS.toCharArray())
@@ -86,15 +99,21 @@ object Tls {
         val dir = File(ctx.applicationContext.filesDir, DIR)
         val certFile = File(dir, CERT)
         val keyFile = File(dir, KEY)
-        val existing = if (certFile.isFile && keyFile.isFile) {
+        val caCertFile = File(dir, CA_CERT)
+        val existing = if (certFile.isFile && keyFile.isFile && caCertFile.isFile) {
             try {
-                val cert = CertificateFactory.getInstance("X.509")
-                    .generateCertificate(certFile.inputStream()) as X509Certificate
+                val cf = CertificateFactory.getInstance("X.509")
+                val cert = cf.generateCertificate(certFile.inputStream()) as X509Certificate
+                val ca = cf.generateCertificate(caCertFile.inputStream()) as X509Certificate
                 val key = KeyFactory.getInstance("EC")
                     .generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes()))
                 // A renamed host or an expired certificate is worth replacing:
                 // nobody has to trust the old one any more.
-                if (usable(cert, name)) Identity(cert, key, certFile.readBytes()) else null
+                if (usable(cert, name)) {
+                    Identity(cert, ca, key, certFile.readBytes(), caCertFile.readBytes())
+                } else {
+                    null
+                }
             } catch (e: Exception) {
                 null
             }
@@ -106,6 +125,7 @@ object Tls {
             dir.mkdirs()
             certFile.writeBytes(it.pem)
             keyFile.writeBytes(it.key.encoded)
+            caCertFile.writeBytes(it.caPem)
         }
         loaded = id
         return id
@@ -126,24 +146,25 @@ object Tls {
         // P-256 rather than RSA: it generates in milliseconds, so this can even
         // run on the UI thread that asks for the fingerprint, and browsers have
         // supported it for years.
-        val pair = KeyPairGenerator.getInstance("EC").apply {
-            initialize(ECGenParameterSpec("secp256r1"), rnd)
-        }.generateKeyPair()
-
         val algorithm = Der.seq(Der.oid("1.2.840.10045.4.3.2")) // ecdsa-with-SHA256
-        val subject = Der.seq(
-            Der.set(Der.seq(Der.oid("2.5.4.10"), Der.utf8("andWebCam"))),
-            Der.set(Der.seq(Der.oid("2.5.4.3"), Der.utf8(name))),
+        val org = Der.set(Der.seq(Der.oid("2.5.4.10"), Der.utf8("andWebCam")))
+
+        // The root: self-signed, an actual CA, allowed to sign certificates.
+        // Nothing else about it matters; the leaf carries the name.
+        val caName = Der.seq(org, Der.set(Der.seq(Der.oid("2.5.4.3"), Der.utf8("andWebCam root"))))
+        val caExt = Der.seq(
+            // BasicConstraints CA:TRUE, no path length.
+            Der.extension("2.5.29.19", true, Der.seq(Der.raw(0x01, byteArrayOf(0xFF.toByte())))),
+            // keyUsage: digitalSignature (bit 0) and keyCertSign (bit 5).
+            Der.extension("2.5.29.15", true, Der.raw(0x03, byteArrayOf(2, 0x84.toByte()))),
         )
-        val fmt = SimpleDateFormat("yyMMddHHmmss'Z'", Locale.US).apply {
-            timeZone = TimeZone.getTimeZone("UTC")
-        }
-        val now = System.currentTimeMillis()
-        // An hour of backdating covers a phone whose clock is behind the PC's.
-        val validity = Der.seq(
-            Der.utcTime(fmt.format(Date(now - 3600_000L))),
-            Der.utcTime(fmt.format(Date(now + DAYS * 86400_000L))),
+        val caPair = keyPair(rnd)
+        val caDer = signed(
+            tbs(caName, caName, caPair.public.encoded, caExt, rnd), algorithm, caPair.private,
         )
+
+        // The leaf: signed by the root, named for this phone, good for TLS.
+        val subject = Der.seq(org, Der.set(Der.seq(Der.oid("2.5.4.3"), Der.utf8(name))))
         val extensions = Der.seq(
             Der.extension("2.5.29.19", true, Der.seq()),                          // CA:FALSE
             Der.extension("2.5.29.15", true, Der.raw(0x03, byteArrayOf(7, 0x80.toByte()))), // digitalSignature
@@ -156,29 +177,60 @@ object Tls {
                 )
             ),
         )
-
-        val tbs = Der.seq(
-            Der.raw(0xA0, Der.integer(BigInteger.valueOf(2))),                   // v3
-            Der.integer(BigInteger(64, rnd).add(BigInteger.ONE)),
-            algorithm,
-            subject,                                                             // issuer
-            validity,
-            subject,                                                             // subject
-            pair.public.encoded,
-            Der.raw(0xA3, extensions),
+        val pair = keyPair(rnd)
+        val der = signed(
+            tbs(subject, caName, pair.public.encoded, extensions, rnd), algorithm, caPair.private,
         )
-        val signature = Signature.getInstance("SHA256withECDSA").run {
-            initSign(pair.private)
-            update(tbs)
-            sign()
-        }
-        val der = Der.seq(tbs, algorithm, Der.raw(0x03, byteArrayOf(0) + signature))
 
         return Identity(
             CertificateFactory.getInstance("X.509").generateCertificate(der.inputStream()) as X509Certificate,
+            CertificateFactory.getInstance("X.509").generateCertificate(caDer.inputStream()) as X509Certificate,
             pair.private,
             pem(der),
+            pem(caDer),
         )
+    }
+
+    private fun keyPair(rnd: SecureRandom) = KeyPairGenerator.getInstance("EC").apply {
+        initialize(ECGenParameterSpec("secp256r1"), rnd)
+    }.generateKeyPair()
+
+    /** One TBSCertificate: [subject] as issuer and subject both, if self-signed. */
+    private fun tbs(
+        subject: ByteArray,
+        issuer: ByteArray,
+        publicKey: ByteArray,
+        extensions: ByteArray,
+        rnd: SecureRandom,
+    ): ByteArray {
+        val fmt = SimpleDateFormat("yyMMddHHmmss'Z'", Locale.US).apply {
+            timeZone = TimeZone.getTimeZone("UTC")
+        }
+        val now = System.currentTimeMillis()
+        // An hour of backdating covers a phone whose clock is behind the PC's.
+        val validity = Der.seq(
+            Der.utcTime(fmt.format(Date(now - 3600_000L))),
+            Der.utcTime(fmt.format(Date(now + DAYS * 86400_000L))),
+        )
+        return Der.seq(
+            Der.raw(0xA0, Der.integer(BigInteger.valueOf(2))),                   // v3
+            Der.integer(BigInteger(64, rnd).add(BigInteger.ONE)),
+            Der.seq(Der.oid("1.2.840.10045.4.3.2")),                             // ecdsa-with-SHA256
+            issuer,
+            validity,
+            subject,
+            publicKey,
+            Der.raw(0xA3, extensions),
+        )
+    }
+
+    private fun signed(tbs: ByteArray, algorithm: ByteArray, key: PrivateKey): ByteArray {
+        val signature = Signature.getInstance("SHA256withECDSA").run {
+            initSign(key)
+            update(tbs)
+            sign()
+        }
+        return Der.seq(tbs, algorithm, Der.raw(0x03, byteArrayOf(0) + signature))
     }
 
     private fun pem(der: ByteArray): ByteArray {
