@@ -266,12 +266,13 @@ object WebUi {
       <h2>Problems downloading?</h2>
       <button id="dlHelpClose" class="paneClose" title="Close" aria-label="Close">&times;</button>
     </div>
-    <p>The phone serves HTTPS with a self-signed certificate. Browsing works because you accepted the warning, but Chrome refuses to download files over a connection it does not trust &mdash; the request is dropped before it ever reaches the phone. Trusting the certificate once fixes downloads everywhere, and the warning too.</p>
-    <p>1. <a href="/cert" download="andwebcam.crt">Download the certificate</a> (andwebcam.crt).</p>
-    <p>2. Install it:</p>
-    <p><b>Windows</b> &mdash; double-click the file, Install Certificate, Current User, "Place all certificates in the following store" &rarr; Trusted Root Certification Authorities, Finish, then restart Chrome.</p>
-    <p><b>macOS</b> &mdash; double-click the file to add it to the login keychain, open it there, Trust &rarr; Always Trust.</p>
-    <p><b>Linux</b> &mdash; Chrome keeps its own store: <code>certutil -d sql:${'$'}HOME/.pki/nssdb -A -t "C,," -n andwebcam -i andwebcam.crt</code> (from the libnss3-tools package), then restart Chrome.</p>
+    <p>The phone serves HTTPS with a self-signed certificate. Browsing works because you accepted the warning, but Chrome drops download requests at the door &mdash; they never reach the phone. Trusting the certificate once fixes downloads everywhere, and the warning too.</p>
+    <p><button id="dlCertBtn" class="secondary">Download the certificate</button> &mdash; saved as andwebcam.crt through this page's own connection, which your browser already allows.</p>
+    <p>Then tell your system to trust it. One line per system (curl is built into Windows 10+ and macOS):</p>
+    <p><b>Windows</b> &mdash; <code id="wCmd"></code></p>
+    <p><b>macOS</b> &mdash; <code id="mCmd"></code> (asks for your password).</p>
+    <p><b>Linux</b> &mdash; <code id="lCmd"></code> (certutil comes from the libnss3-tools package; restart Chrome afterwards).</p>
+    <p>One catch: the certificate is issued to the phone's name, so browse by that name &mdash; <b>https://<span id="certName"></span></b> &mdash; not the bare IP. Chrome checks the name even for a trusted certificate.</p>
     <p>Firefox downloads without any of this; to silence its warning, Settings &rarr; Privacy &amp; Security &rarr; Certificates &rarr; View Certificates &rarr; Authorities &rarr; Import.</p>
   </div>
 </div>
@@ -1066,6 +1067,30 @@ el('dlHelp').onclick = function(e) {
 };
 el('dlHelpClose').onclick = function() { el('dlHelpBox').classList.add('hidden'); };
 el('dlHelpBox').onclick = function(e) { if (e.target === this) { this.classList.add('hidden'); } };
+// The trust commands are written with the address this page is actually on,
+// so they work as pasted. The certificate itself is fetched with the page's
+// own credentials and saved from a blob, which needs no second TLS
+// handshake - that second handshake is exactly what Chrome refuses.
+(function() {
+  var url = location.protocol + '//' + location.host + '/cert';
+  el('wCmd').textContent = 'curl -k -o andwebcam.crt ' + url + ' && certutil -addstore -user Root andwebcam.crt';
+  el('mCmd').textContent = 'curl -k -o andwebcam.crt ' + url + ' && security add-trusted-cert -r trustRoot andwebcam.crt';
+  el('lCmd').textContent = 'curl -k ' + url + ' | certutil -d sql:${'$'}HOME/.pki/nssdb -A -t "C,," -n andwebcam';
+  el('certName').textContent = (window.S && window.S.serviceName ? window.S.serviceName : location.hostname) + '.local:' + location.port;
+})();
+el('dlCertBtn').onclick = function() {
+  fetch('/cert').then(function(r) { return r.blob(); }).then(function(b) {
+    var a = document.createElement('a');
+    a.href = URL.createObjectURL(b);
+    a.download = 'andwebcam.crt';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(function() { URL.revokeObjectURL(a.href); }, 10000);
+  }).catch(function() {
+    window.location.href = '/cert';
+  });
+};
 el('recBtn').onclick = function() {
   var b = el('recBtn');
   if (b.disabled) { return; }
