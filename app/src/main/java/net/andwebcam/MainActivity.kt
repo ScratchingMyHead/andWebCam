@@ -95,10 +95,16 @@ class MainActivity : Activity() {
     ) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults)
         if (requestCode == REQ_PERMISSIONS) {
-            if (Prefs.enabled &&
-                checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
-            ) {
-                CamService.reload(this)
+            val i = permissions.indexOf(Manifest.permission.CAMERA)
+            val cameraNowGranted = i >= 0 && grantResults[i] == PackageManager.PERMISSION_GRANTED
+            if (Prefs.enabled && cameraNowGranted) {
+                // The service registers its camera-type foreground service when
+                // it starts, which on first run is before the permission exists.
+                // The camera service keeps refusing every open until that
+                // registration happens again, so the whole service restarts -
+                // restarting just the camera changes nothing.
+                CamService.stop(this)
+                handler.postDelayed({ if (Prefs.enabled) CamService.start(this) }, 1000)
             }
             requestBatteryExemption()
         }
