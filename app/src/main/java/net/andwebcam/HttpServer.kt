@@ -446,10 +446,17 @@ class HttpServer(
             }
 
             // Play a finished recording. The list is admin-only, but a video
-            // URL shared with a viewer plays like a stream frame does.
-            method == "GET" && path == "/video/file" -> {
+            // URL shared with a viewer plays like a stream frame does. The
+            // name may sit in the path - a browser names a download after the
+            // last segment - or in the query, as links used to carry it.
+            method == "GET" && (path == "/video/file" || path.startsWith("/video/file/")) -> {
                 if (role == Role.NONE) unauthorized(output) else {
-                    val file = host.videoFile(queryParam(query, "name") ?: "")
+                    val name = if (path.length > "/video/file/".length && path.startsWith("/video/file/")) {
+                        path.substring("/video/file/".length)
+                    } else {
+                        queryParam(query, "name") ?: ""
+                    }
+                    val file = host.videoFile(java.net.URLDecoder.decode(name, "UTF-8"))
                     if (file == null) respond(output, 404, "text/plain", "no such video".toByteArray())
                     else serveVideoFile(output, file, headers)
                 }

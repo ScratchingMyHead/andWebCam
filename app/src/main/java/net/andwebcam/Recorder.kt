@@ -369,7 +369,7 @@ class Recorder(private val ctx: Context) {
 
         tempFile = tempName
         recording = true
-        lastNote = "Recording. The last 10 seconds are included."
+        lastNote = "Recording."
         Log.i(TAG, "recording started: $tempName (${w}x$h) with ${enc.name}, ring carried ${ringFrames.size} frames")
         recordSession(enc, w, h)
     }

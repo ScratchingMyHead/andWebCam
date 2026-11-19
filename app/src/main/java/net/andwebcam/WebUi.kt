@@ -212,7 +212,6 @@ object WebUi {
         <button id="recPaneClose" class="paneClose" title="Hide the recording pane" aria-label="Hide the recording pane">&raquo;</button>
       </div>
       <p class="err hidden" id="recMsg"></p>
-      <p class="hint hidden" id="recOff">Streaming is off, so the phone is not recording anything. Turn it on in the settings pane to record.</p>
       <p class="hint hidden" id="recNote"></p>
       <p class="hint">Recording includes 10 second buffer</p>
 
@@ -863,6 +862,7 @@ el('l_pass').addEventListener('keydown', loginKey);
 var recPoll = null;
 var recPlaying = null;
 var recNoteSeen = null;
+var recNoteArmed = false;
 function recFmtSize(b) {
   if (b == null || b === undefined || isNaN(b)) { return '-'; }
   if (b < 1024) { return b + ' B'; }
@@ -910,7 +910,9 @@ function recPlay(name) {
   recPlaying = name;
   var v = el('recPlay');
   v.classList.remove('hidden');
-  v.src = '/video/file?name=' + encodeURIComponent(name);
+  // The name is in the path so a browser's own download uses it; the query
+  // form is still accepted for links made before this.
+  v.src = '/video/file/' + encodeURIComponent(name);
   v.play().catch(function() {});
 }
 function recRefresh() {
@@ -924,10 +926,18 @@ function recRefresh() {
     }
     // Without a folder there is nowhere to write, and with streaming off the
     // phone is meant to be idle: both stop a session before it starts.
-    var canRecord = !!window.S.logFolder && !!window.S.streaming;
+    var S = window.S || {};
+    var canRecord = !!S.logFolder && !!S.streaming;
     btn.disabled = !canRecord && !d.recording;
-    el('recOff').classList.toggle('hidden', !!window.S.streaming);
-    if (d.note && d.note !== recNoteSeen) { recNoteSeen = d.note; recMsg(d.note); }
+    // The note is the last thing the recorder said. A page load must not
+    // replay an old one, so the first answer only records what it saw; a
+    // change after that is news.
+    if (recNoteArmed) {
+      if (d.note && d.note !== recNoteSeen) { recNoteSeen = d.note; recMsg(d.note); }
+    } else {
+      recNoteSeen = d.note;
+      recNoteArmed = true;
+    }
     if (document.activeElement !== el('s_cap')) { el('s_cap').value = d.capPercent || 10; }
     el('v_capv').textContent = d.capPercent || 10;
     el('s_cap').disabled = !!d.recording;
