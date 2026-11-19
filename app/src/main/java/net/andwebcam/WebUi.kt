@@ -74,7 +74,9 @@ object WebUi {
  .vname { flex:1; font-family:monospace; font-size:12px; color:#dde; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
  .vmeta { font-size:11px; color:#889; white-space:nowrap }
  .vrow button { padding:5px 9px; font-size:12px }
- .vrow button svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
+ .vrow button svg, .vrow a svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
+ .vrow a { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:5px 9px; font-size:12px; text-decoration:none }
+ .vrow a:hover { background:#3d3d3d }
  #recPlay { width:100%; margin:9px 0 0; background:#000 }
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
@@ -870,6 +872,7 @@ var recNoteArmed = false;
 var ICON_PLAY = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.1 12.7 8 5 12.9z"/></svg>';
 var ICON_STOP = '<svg viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.2"/></svg>';
 var ICON_BIN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6.2 1.6h3.6v1.1h3.6v1.5H2.6V2.7h3.6zM3.5 5.5h9l-.7 8.9H4.2z"/></svg>';
+var ICON_DOWN = '<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M7.2 1.8h1.6v5l2.1-2.1 1.1 1.1L8 9.9 4 5.8l1.1-1.1 2.1 2.1z"/><path d="M2.8 11.2h10.4v1.5H2.8z"/></svg>';
 function recFmtSize(b) {
   if (b == null || b === undefined || isNaN(b)) { return '-'; }
   if (b < 1024) { return b + ' B'; }
@@ -954,6 +957,11 @@ function recRefresh() {
         recMB1(d.used) + ' MB (' +
         (d.cap ? ((d.used || 0) / d.cap * 100).toFixed(1) : '0.0') + '%)';
     var list = el('recList');
+    var player = el('recPlay');
+    // Detach the player before clearing the list, or the clear would
+    // destroy it. The re-insert happens in the same task, so a video that
+    // is playing does not even stutter.
+    if (player.parentNode) { player.parentNode.removeChild(player); }
     list.innerHTML = '';
     var vids = d.videos || [];
     if (!vids.length) {
@@ -961,12 +969,15 @@ function recRefresh() {
       p.className = 'hint';
       p.textContent = 'Nothing recorded yet.';
       list.appendChild(p);
+      list.parentNode.insertBefore(player, list);
       return;
     }
     // Newest first: the one just recorded is the one being looked for.
+    var rows = [];
     vids.slice().reverse().forEach(function(v) {
       var row = document.createElement('div');
       row.className = 'vrow';
+      row.dataset.name = v.name;
       var name = document.createElement('span');
       name.className = 'vname';
       name.textContent = v.name;
@@ -984,6 +995,12 @@ function recRefresh() {
         else { recPlay(v.name); }
         recRefresh();
       };
+      var dl = document.createElement('a');
+      dl.href = '/video/file/' + encodeURIComponent(v.name);
+      dl.download = v.name;
+      dl.innerHTML = ICON_DOWN;
+      dl.title = 'Download';
+      dl.setAttribute('aria-label', 'Download ' + v.name);
       var del = document.createElement('button');
       del.className = 'secondary';
       del.innerHTML = ICON_BIN;
@@ -1005,9 +1022,20 @@ function recRefresh() {
       row.appendChild(name);
       row.appendChild(meta);
       row.appendChild(play);
+      row.appendChild(dl);
       row.appendChild(del);
-      list.appendChild(row);
+      rows.push(row);
     });
+    rows.forEach(function(r) { list.appendChild(r); });
+    // The player sits just above the row it is playing: in a long list the
+    // top of the pane is off screen, and it should not take scrolling to
+    // see what is playing or to pick the next video.
+    var at = -1;
+    for (var i = 0; i < rows.length; i++) {
+      if (rows[i].dataset.name === recPlaying) { at = i; break; }
+    }
+    if (at >= 0) { list.insertBefore(player, rows[at]); }
+    else { list.parentNode.insertBefore(player, list); }
   }).catch(function() {});
 }
 function recPollTick() { recRefresh(); }
