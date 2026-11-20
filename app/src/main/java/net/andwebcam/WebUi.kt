@@ -1033,9 +1033,25 @@ function updatePlayButtons() {
   }
 }
 
+// Move the player under the row being played without rebuilding the list:
+// rebuilding would stutter playback, and moving a fullscreen element would
+// end fullscreen.
+function placePlayer() {
+  if (document.fullscreenElement || document.webkitFullscreenElement) { return; }
+  var list = el('recList');
+  var player = el('recPlay');
+  var row = list.querySelector('.vrow[data-name="' + (recPlaying || '') + '"]');
+  if (row && row.parentNode === list) {
+    list.insertBefore(player, row.nextSibling);
+  } else if (player.parentNode !== list.parentNode || player.nextSibling !== list) {
+    list.parentNode.insertBefore(player, list);
+  }
+}
+
 function recPlay(name) {
   recPlaying = name;
   updatePlayButtons();
+  placePlayer();
   var v = el('recPlay');
   v.classList.remove('hidden');
   // The name is in the path so a browser's own download uses it; the query
@@ -1155,14 +1171,13 @@ function recRefresh() {
       rows.push(row);
     });
     rows.forEach(function(r) { list.appendChild(r); });
-    // The player sits just above the row it is playing: in a long list the
-    // top of the pane is off screen, and it should not take scrolling to
-    // see what is playing or to pick the next video.
+    // The player sits just below the row it is playing, so the row that was
+    // clicked stays put and the list does not jump while scrolling.
     var at = -1;
     for (var i = 0; i < rows.length; i++) {
       if (rows[i].dataset.name === recPlaying) { at = i; break; }
     }
-    if (at >= 0) { list.insertBefore(player, rows[at]); }
+    if (at >= 0) { list.insertBefore(player, rows[at].nextSibling); }
     else { list.parentNode.insertBefore(player, list); }
   }).catch(function() {});
 }
