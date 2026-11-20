@@ -292,8 +292,9 @@ object WebUi {
         <button id="zoneClear" class="secondary hidden">Clear</button>
         <button id="zoneSave" class="secondary hidden">Save</button>
         <button id="zoneCancel" class="secondary hidden">Cancel</button>
+        <button id="dbgToggle" class="secondary">Hide debug</button>
       </div>
-      <div class="zhdr"><span>ID</span><span>Trigger level</span><span></span></div>
+      <div class="zhdr"><span>ID</span><span>Minimum object size</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
       <div id="zoneList"><p class="hint">No zones yet.</p></div>
     </div>
@@ -903,6 +904,7 @@ el('doUpdate').onclick = function() {
 var PANES = { paneToggle: 'settings', recPaneToggle: 'recording', motionPaneToggle: 'motion' };
 var PANE_TITLES = { settings: 'the settings pane', recording: 'the recording pane', motion: 'the motion pane' };
 var pane = 'settings';
+var debugOpen = true;
 function applyPane() {
   var admin = !!(window.S && window.S.admin);
   var open = pane;
@@ -917,7 +919,7 @@ function applyPane() {
   el('admin').classList.toggle('hidden', !(admin && open === 'settings'));
   el('recPane').classList.toggle('hidden', !(admin && open === 'recording'));
   el('motionPane').classList.toggle('hidden', !(admin && open === 'motion'));
-  el('motionDebugWrap').classList.toggle('hidden', !(admin && open === 'motion'));
+  el('motionDebugWrap').classList.toggle('hidden', !(admin && open === 'motion' && debugOpen));
   // The recording pane polls its own list while it is open, and the player
   // does not keep running behind a closed one. The motion pane polls the
   // zone levels the same way.
@@ -956,6 +958,11 @@ function openPane(which) {
 el('paneToggle').onclick = function() { openPane('settings'); };
 el('recPaneToggle').onclick = function() { openPane('recording'); };
 el('motionPaneToggle').onclick = function() { openPane('motion'); };
+el('dbgToggle').onclick = function() {
+  debugOpen = !debugOpen;
+  this.textContent = debugOpen ? 'Hide debug' : 'Show debug';
+  applyPane();
+};
 el('paneClose').onclick = el('recPaneClose').onclick = el('motionPaneClose').onclick = function() {
   pane = 'hidden';
   applyPane();
@@ -1301,7 +1308,7 @@ function buildZoneList(d) {  var list = el('zoneList');
       slider.min = 0;
       slider.max = 100;
       slider.className = 'zslider';
-      slider.setAttribute('aria-label', 'Sensitivity of zone ' + z.id);
+      slider.setAttribute('aria-label', 'Minimum object size for zone ' + z.id);
       slider.dataset.id = z.id;
       slider.value = z.sensitivity;
       slider.onchange = function() { saveZones(); };
