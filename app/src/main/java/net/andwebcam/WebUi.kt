@@ -286,13 +286,13 @@ object WebUi {
         <input id="s_grid" type="range" min="4" max="160" step="1">
       </div>
       <div class="sensscale"><span>Bigger cells</span><span>Smaller cells</span></div>
+      <div class="actions"><button id="dbgToggle" class="secondary">Hide debug</button></div>
       <h2>Activation zones</h2>
       <div class="actions">
         <button id="zoneAdd" class="secondary">Add</button>
         <button id="zoneClear" class="secondary hidden">Clear</button>
         <button id="zoneSave" class="secondary hidden">Save</button>
         <button id="zoneCancel" class="secondary hidden">Cancel</button>
-        <button id="dbgToggle" class="secondary">Hide debug</button>
       </div>
       <div class="zhdr"><span>ID</span><span>Minimum object size</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
@@ -1244,12 +1244,18 @@ function motionTick() {
     var b = el('motionBtn');
     b.disabled = !window.S.logFolder;
     b.textContent = d.enabled ? 'Stop motion' : 'Start motion';
+    // Leave a slider alone while it is being dragged: the poll would pull the
+    // handle, and the number above it, back to the old configured value.
     if (document.activeElement !== el('s_quiet')) { el('s_quiet').value = d.quiet || 30; }
     el('v_quiet').textContent = d.quiet || 30;
-    if (document.activeElement !== el('s_level')) { el('s_level').value = d.level == null ? 85 : d.level; }
-    el('v_level').textContent = d.level == null ? 85 : d.level;
-    if (document.activeElement !== el('s_grid')) { el('s_grid').value = d.grid || 32; }
-    el('v_grid').textContent = d.grid || 32;
+    if (document.activeElement !== el('s_level')) {
+      el('s_level').value = d.level == null ? 85 : d.level;
+      el('v_level').textContent = d.level == null ? 85 : d.level;
+    }
+    if (document.activeElement !== el('s_grid')) {
+      el('s_grid').value = d.grid || 32;
+      el('v_grid').textContent = d.grid || 32;
+    }
     drawZones();
     buildZoneList(d);
     renderMotionDebug(d.events || []);
