@@ -22,6 +22,8 @@ object WebUi {
  .bk { color:#888 }
  .bv { color:#eee; font-weight:600 }
  .content { display:flex; gap:14px; align-items:flex-start; flex-wrap:wrap }
+ .vleft { flex:1 1 560px; min-width:280px; display:flex; flex-direction:column; gap:10px }
+ .vleft .video { flex:0 0 auto; width:100% }
  .video { flex:1 1 560px; min-width:280px; min-height:220px; position:relative; display:flex; align-items:center; justify-content:center; max-height:78vh; overflow:hidden; background:#000; border-radius:8px }
  .video img { display:block; flex:0 0 auto; width:100%; height:auto; max-height:78vh; object-fit:contain; user-select:none; -webkit-user-drag:none }
  .video.fitw img { max-height:none }
@@ -90,6 +92,9 @@ object WebUi {
  .zrow .zslider { width:100%; margin-left:0 }
  .sensscale { display:flex; justify-content:space-between; font-size:11px; color:#889; margin:-4px 0 8px }
  .dbg { font-family:monospace; font-size:11px; color:#9aa; background:#0d0d0d; border:1px solid #222; border-radius:6px; padding:6px 8px; max-height:190px; overflow:auto; line-height:1.5 }
+ .dbgwrap { width:100% }
+ .dbghead { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#8ab; margin:0 0 4px }
+ .dbghint { text-transform:none; letter-spacing:0; color:#667; margin-left:6px }
  .dbg .dbgline { white-space:pre-wrap }
  .dbg .hi { color:#e8b; }
  .zrow button { padding:5px 9px; font-size:12px }
@@ -138,12 +143,18 @@ object WebUi {
     <div class="bitem"><span class="bk">Viewers</span><span class="bv" id="i_view">-</span></div>
   </div>
   <div class="content">
+    <div class="vleft">
     <div class="video loading" id="video">
       <img id="vid" alt="">
       <svg id="zones" class="hidden" preserveAspectRatio="none" viewBox="0 0 1000 1000"></svg>
       <div class="vload">Loading video...</div>
       <div id="busy" class="busy hidden"><span class="spin"></span><span id="busyText">Applying...</span></div>
       <div id="stopped" class="overlay hidden"><div>Streaming is stopped</div><div id="stoppedHint" style="font-size:12px"></div></div>
+    </div>
+    <div id="motionDebugWrap" class="dbgwrap hidden">
+      <div class="dbghead">Motion debug <span class="dbghint">rises over 2 points, newest first</span></div>
+      <div id="motionDebug" class="dbg"><p class="hint">No activations yet.</p></div>
+    </div>
     </div>
     <div class="panel hidden" id="admin">
       <h2>Streaming</h2>
@@ -285,8 +296,6 @@ object WebUi {
       <div class="zhdr"><span>ID</span><span>Trigger level</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
       <div id="zoneList"><p class="hint">No zones yet.</p></div>
-      <h2>Debug</h2>
-      <div id="motionDebug" class="dbg"><p class="hint">No activations yet.</p></div>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
@@ -908,6 +917,7 @@ function applyPane() {
   el('admin').classList.toggle('hidden', !(admin && open === 'settings'));
   el('recPane').classList.toggle('hidden', !(admin && open === 'recording'));
   el('motionPane').classList.toggle('hidden', !(admin && open === 'motion'));
+  el('motionDebugWrap').classList.toggle('hidden', !(admin && open === 'motion'));
   // The recording pane polls its own list while it is open, and the player
   // does not keep running behind a closed one. The motion pane polls the
   // zone levels the same way.
