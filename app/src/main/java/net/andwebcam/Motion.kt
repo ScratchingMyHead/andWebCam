@@ -48,7 +48,7 @@ class Motion {
         private const val ANALYSE_EVERY_MS = 200L   // ~5 fps is plenty for motion
         private const val GLOBAL_SKIP = 0.5         // most of the frame changing = exposure, not motion
         private const val COOLDOWN_MS = 5000L       // quiet time between triggers
-        private const val PEAK_HOLD_MS = 6000L      // how long a level spike stays visible
+        private const val HISTORY_MS = 20000L       // how far back a late poll can reach
         private const val TARGET_W = 320            // analysis frame width
         private const val BG_RATE = 32              // background absorbs 1/32 per tick (~20 s)
 
@@ -72,8 +72,6 @@ class Motion {
     /** A parsed zone with its live state. */
     class Zone(val sensitivity: Int, val points: List<Pair<Double, Double>>) {
         var level = 0            // largest blob seen in the zone, on the slider's scale
-        var peak = 0             // highest level recently, held so polls cannot miss it
-        var peakAt = 0L          // when peak was last raised
     }
 
     /** Invoked when a zone fires; argument is the zone's 1-based position. */
@@ -114,6 +112,10 @@ class Motion {
     private val events = ArrayDeque<Map<String, Any>>()
     private var lastOverall = 0
 
+    /** One analysis tick's per-zone levels, kept briefly for late polls. */
+    private class Tick(val t: Long, val levels: IntArray)
+    private val history = ArrayDeque<Tick>()
+
     fun diagnostics(): Map<String, Any> = mapOf(
         "changed" to diagChanged,
         "cells" to diagCells,
@@ -135,10 +137,37 @@ class Motion {
      * A stable copy of the zone list for the page: 1-based id, sensitivity,
      * normalized points and the live level.
      */
-    class Snapshot(val id: Int, val sensitivity: Int, val points: List<Pair<Double, Double>>, val level: Int, val peak: Int)
+    class Snapshot(
+        val id: Int,
+        val sensitivity: Int,
+        val points: List<Pair<Double, Double>>,
+        val level: Int,
+        val peakSince: Int,
+    )
 
-    fun snapshot(): List<Snapshot> = synchronized(zones) {
-        zones.mapIndexed { i, z -> Snapshot(i + 1, z.sensitivity, z.points, z.level, z.peak) }
+    /**
+     * The zone list plus, for each zone, the highest level since [since] (a
+     * server timestamp the page echoes back from its previous poll). The page
+     * polls slower than the analysis runs, so this is how a spike between two
+     * polls is still delivered.
+     */
+    fun snapshotSince(since: Long): List<Snapshot> = synchronized(zones) {
+        val peaks = IntArray(zones.size)
+        if (since > 0) {
+            synchronized(history) {
+                for (tick in history) {
+                    if (tick.t <= since) continue
+                    val n = Math.min(peaks.size, tick.levels.size)
+                    for (i in 0 until n) {
+                        if (tick.levels[i] > peaks[i]) peaks[i] = tick.levels[i]
+                    }
+                }
+            }
+        }
+        zones.mapIndexed { i, z ->
+            val peak = if (since > 0) Math.max(peaks[i], z.level) else z.level
+            Snapshot(i + 1, z.sensitivity, z.points, z.level, peak)
+        }
     }
 
     // ---- configuration ----------------------------------------------------
@@ -165,6 +194,7 @@ class Motion {
     fun setZones(spec: String): String? {
         load(spec)
         Prefs.motionZones = if (zones.isEmpty()) null else spec
+        synchronized(history) { history.clear() }
         Log.i(TAG, "zones set: ${zoneCount()} at aspect $aspect")
         return null
     }
@@ -173,6 +203,7 @@ class Motion {
     fun clearZones() {
         synchronized(zones) { zones.clear() }
         Prefs.motionZones = null
+        synchronized(history) { history.clear() }
     }
 
     /** Seconds of quiet after the last motion before a motion recording ends. */
@@ -252,7 +283,8 @@ class Motion {
         latest.set(null)
         active = false
         lastOverall = 0
-        synchronized(zones) { zones.forEach { it.level = 0; it.peak = 0; it.peakAt = 0L } }
+        synchronized(zones) { zones.forEach { it.level = 0 } }
+        synchronized(history) { history.clear() }
     }
 
     // ---- the analysis -----------------------------------------------------
@@ -396,7 +428,10 @@ class Motion {
         var biggestAny = 0
         var overall = 0
         val levels = StringBuilder()
+        val tickNow = System.currentTimeMillis()
+        var tickLevels: IntArray
         synchronized(zones) {
+            tickLevels = IntArray(zones.size)
             for ((index, zone) in zones.withIndex()) {
                 var biggest = 0
                 for ((id, size) in blobSizes.withIndex()) {
@@ -413,28 +448,24 @@ class Motion {
                 // Slider scale: level is the sensitivity that would fire on
                 // this blob, so the fill reaching the handle means firing.
                 zone.level = ((biggest * 100) / mb).coerceIn(0, 100)
-                // Keep the recent peak for a few seconds: the page polls over
-                // a flaky link, and a level that spikes between two polls is
-                // still worth showing, even if a little late.
-                val nowMs = System.currentTimeMillis()
-                if (zone.level > zone.peak) {
-                    zone.peak = zone.level
-                    zone.peakAt = nowMs
-                } else if (nowMs - zone.peakAt > PEAK_HOLD_MS) {
-                    zone.peak = zone.level
-                }
-                if (zone.peak > overall) overall = zone.peak
+                tickLevels[index] = zone.level
+                if (zone.level > overall) overall = zone.level
                 val need = 1 + (zone.sensitivity * (mb - 1)) / 100
                 if (levels.isNotEmpty()) levels.append(' ')
                 levels.append("z${index + 1}=$biggest")
                 if (biggest >= need) {
                     nowActive = true
-                    val now = System.currentTimeMillis()
-                    if (now - lastTrigger > COOLDOWN_MS) {
-                        lastTrigger = now
+                    if (tickNow - lastTrigger > COOLDOWN_MS) {
+                        lastTrigger = tickNow
                         fired.add(index + 1)
                     }
                 }
+            }
+        }
+        synchronized(history) {
+            history.addLast(Tick(tickNow, tickLevels))
+            while (history.isNotEmpty() && tickNow - history.first().t > HISTORY_MS) {
+                history.removeFirst()
             }
         }
         active = nowActive

@@ -994,6 +994,7 @@ var motionPoll = null;
 var recCount = 0;
 var recListKey = '';
 var motionDbgKey = -1;
+var motionSince = 0;
 var recPlaying = null;
 var recNoteSeen = null;
 var recNoteArmed = false;
@@ -1230,8 +1231,9 @@ function motionMsg(text) {
 function motionTick() {
   if (!(window.S && window.S.admin)) { return; }
   if (el('motionPane').classList.contains('hidden')) { return; }
-  fetch('/api/motion/list').then(function(r) { return r.json(); }).then(function(d) {
+  fetch('/api/motion/list?since=' + motionSince).then(function(r) { return r.json(); }).then(function(d) {
     motionData = d;
+    motionSince = d.now || motionSince;
     var b = el('motionBtn');
     b.disabled = !window.S.logFolder;
     b.textContent = d.enabled ? 'Stop motion' : 'Start motion';
@@ -1328,7 +1330,16 @@ function buildZoneList(d) {  var list = el('zoneList');
     var s = list.querySelector('input[data-id="' + z.id + '"]');
     if (!s) { return; }
     if (document.activeElement !== s) { s.value = z.sensitivity; }
-    paintLevel(s, Math.max(z.level || 0, z.peak || 0));
+    // The phone gives the highest level since the previous poll, so a spike
+    // between polls still reaches us. Show it immediately, then settle back
+    // to the live level quickly, keeping the meter lively.
+    var live = z.level || 0;
+    var shown = Math.max(live, z.peakSince || 0);
+    paintLevel(s, shown);
+    clearTimeout(s._decay);
+    if (shown > live) {
+      s._decay = setTimeout(function() { paintLevel(s, live); }, 700);
+    }
   });
   el('zoneClear').classList.toggle('hidden', !zones.length || !!drawing);
 }

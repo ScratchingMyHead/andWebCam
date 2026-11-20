@@ -788,13 +788,14 @@ class CamService : Service(), HttpServer.Host {
         return err
     }
 
-    override fun motionInfo(): Map<String, Any?> {
-        val zones = motion.snapshot().map {
+    override fun motionInfo(since: Long): Map<String, Any?> {
+        val now = System.currentTimeMillis()
+        val zones = motion.snapshotSince(since).map {
             mapOf(
                 "id" to it.id,
                 "sensitivity" to it.sensitivity,
                 "level" to it.level,
-                "peak" to it.peak,
+                "peakSince" to it.peakSince,
                 "points" to it.points.map { p -> listOf(p.first, p.second) },
             )
         }
@@ -806,6 +807,7 @@ class CamService : Service(), HttpServer.Host {
             "aspect" to motion.zoneAspect(),
             "zones" to zones,
             "events" to motion.eventLog(),
+            "now" to now,
         )
     }
 

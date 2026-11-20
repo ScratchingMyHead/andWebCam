@@ -79,7 +79,7 @@ class HttpServer(
          * The motion pane's data: enabled flag, the quiet period, and each
          * zone with its points, sensitivity and live level.
          */
-        fun motionInfo(): Map<String, Any?>
+        fun motionInfo(since: Long): Map<String, Any?>
 
         /** Replaces the zones; null when accepted, else why not. */
         fun saveMotionZones(zones: String): String?
@@ -500,7 +500,8 @@ class HttpServer(
 
             method == "GET" && path == "/api/motion/list" -> {
                 if (role != Role.ADMIN) unauthorized(output) else {
-                    respond(output, 200, "application/json", jsonBytes(host.motionInfo()))
+                    val since = queryParam(query, "since")?.toLongOrNull() ?: 0L
+                    respond(output, 200, "application/json", jsonBytes(host.motionInfo(since)))
                 }
             }
 
