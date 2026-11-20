@@ -81,6 +81,8 @@ object WebUi {
  .zslider { -webkit-appearance:none; appearance:none; width:110px; height:8px; border-radius:4px; background:#243038; outline:none; cursor:pointer }
  .zslider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
  .zslider::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
+ .zid { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:50%; border:2px solid #ff8a80; color:#fff; font-size:12px; font-weight:700; flex:0 0 auto }
+ .vrow .zslider { margin-left:auto }
  .vrow input[type=range] { padding:0 }
  .vrow a { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:5px 9px; font-size:12px; text-decoration:none }
  .vrow a:hover { background:#3d3d3d }
@@ -1163,9 +1165,12 @@ function buildZoneList(d) {
     zones.forEach(function(z) {
       var row = document.createElement('div');
       row.className = 'vrow';
+      // The number in a ring, so it reads as the same thing the overlay puts
+      // on the video.
       var name = document.createElement('span');
-      name.className = 'vname';
-      name.textContent = 'Zone ' + z.id;
+      name.className = 'zid';
+      name.textContent = z.id;
+      name.title = 'Zone ' + z.id;
       var slider = document.createElement('input');
       slider.type = 'range';
       slider.min = 0;
@@ -1226,8 +1231,15 @@ function zonesPayload(list) {
 
 function saveZones(list) {
   var d = motionData || { zones: [] };
+  // Without an explicit list (a slider change), the sensitivities come from
+  // the sliders themselves: the polled copy here is whatever the phone last
+  // sent, and writing that back would undo the drag.
   var payload = list || (d.zones || []).map(function(z) {
-    return { sensitivity: z.sensitivity, points: z.points };
+    var s = document.querySelector('input[data-id="' + z.id + '"]');
+    return {
+      sensitivity: s ? (parseInt(s.value, 10) || 0) : z.sensitivity,
+      points: z.points,
+    };
   });
   fetch('/api/motion/zones', {
     method: 'POST',
