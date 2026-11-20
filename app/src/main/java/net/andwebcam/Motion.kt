@@ -8,21 +8,24 @@ import android.util.Log
  * Motion activation: watches the stream's own JPEG frames for objects moving
  * inside user-drawn zones, and says when a zone fires.
  *
- * The analysis runs on a tiny greyscale copy of the frame at a fraction of
- * the stream's rate, in four steps, which is the classic CCTV pipeline:
+ * The analysis runs on a small greyscale copy of the frame at a fraction of
+ * the stream's rate, as a pipeline:
  *
- * 1. **Background model.** Each pixel keeps a running average of what it
- *    usually looks like (about ten seconds to re-absorb a change), so
- *    detection compares against scenery rather than against the previous
- *    frame: someone who stops moving stays detected, and slow exposure drift
- *    is not mistaken for motion.
- * 2. **Change mask.** Pixels further than a few grey levels from their
- *    background are "changed".
- * 3. **Cell grid.** The frame is divided into 16x9 (or 9x16) cells; a cell is
- *    active when a quarter of its pixels changed. Scattered sensor noise
- *    never lights a whole cell.
- * 4. **Blobs.** Connected active cells are grouped; a blob's size in cells is
- *    the size of the object, independent of how big the zone around it is.
+ * 1. **Cell means.** The frame is divided into a 32x18 grid (18x32 in
+ *    portrait) of 10-pixel cells and each cell's mean luminance is taken.
+ *    Averaging 100 pixels crushes sensor noise by ten times, which is what
+ *    keeps high-ISO static out of the trigger - a blur would do the same job
+ *    less well and with an extra pass.
+ * 2. **Background.** Each cell keeps a running average of what it usually
+ *    looks like, absorbing change over about twenty seconds: someone who
+ *    stands still becomes scenery eventually, which is what lets a recording
+ *    end, and slow exposure drift is not mistaken for motion.
+ * 3. **Global rejection.** When more than half the cells change in the same
+ *    tick, that is an exposure step or a scene cut, not motion: the
+ *    background is re-seated and the tick is skipped.
+ * 4. **Blobs.** Connected changed cells (8-connected) are grouped, and a
+ *    blob's size in cells is the size of the object, independent of how big
+ *    the zone around it is.
  *
  * A zone (a polygon in normalized coordinates) fires when it contains a blob
  * of at least the size its sensitivity asks for: sensitivity 0 accepts a
@@ -40,11 +43,11 @@ class Motion {
     companion object {
         private const val TAG = "andWebCam"
         private const val ANALYSE_EVERY_MS = 200L   // ~5 fps is plenty for motion
-        private const val PIXEL_DELTA = 20          // grey levels from background that count as change
-        private const val CELL_FILL = 4             // a cell is active at 1/4 changed pixels
+        private const val CELL_DELTA = 10.0         // grey levels of cell-mean change that count
+        private const val GLOBAL_SKIP = 0.5         // most of the frame changing = exposure, not motion
         private const val COOLDOWN_MS = 5000L       // quiet time between triggers
-        private const val TARGET_W = 160            // analysis frame width
-        private const val BG_RATE = 16              // background absorbs 1/16 per tick (~10 s)
+        private const val TARGET_W = 320            // analysis frame width
+        private const val BG_RATE = 32              // background absorbs 1/32 per tick (~20 s)
         private const val MAX_BLOB = 15             // blob size the top of the slider asks for
     }
 
@@ -66,7 +69,11 @@ class Motion {
     private val latest = java.util.concurrent.atomic.AtomicReference<ByteArray?>()
 
     @Volatile private var thread: Thread? = null
-    private var bg: ByteArray? = null
+
+    /** Per-cell running background, sized to the grid of the last frame. */
+    private var cellBg: DoubleArray? = null
+    private var gridW = 0
+    private var gridH = 0
 
     /** Whether any zone is over its threshold right now. */
     @Volatile var active = false
@@ -164,7 +171,7 @@ class Motion {
     @Synchronized
     private fun start() {
         if (thread?.isAlive == true) return
-        bg = null
+        cellBg = null
         thread = Thread({
             while (enabled) {
                 val jpeg = latest.getAndSet(null)
@@ -211,47 +218,62 @@ class Motion {
         w = turned.second
         h = turned.third
 
-        val background = bg
-        if (background == null || background.size != grey.size) {
-            bg = grey.copyOf()   // first frame, or the frame shape moved
-            return
-        }
-
-        // The cell grid: 16x9 the landscape way round, 9x16 in portrait, so
-        // cells stay roughly square and a blob means the same object size
-        // either way.
-        val gw = if (w >= h) 16 else 9
-        val gh = if (w >= h) 9 else 16
-        val cellChanged = IntArray(gw * gh)
-        val cellArea = IntArray(gw * gh)
+        val gw = if (w >= h) 32 else 18
+        val gh = if (w >= h) 18 else 32
+        var means = DoubleArray(gw * gh)
+        val counts = IntArray(gw * gh)
         for (y in 0 until h) {
             val cy = Math.min(gh - 1, y * gh / h)
             val row = cy * gw
             for (x in 0 until w) {
                 val c = row + Math.min(gw - 1, x * gw / w)
-                cellArea[c]++
-                val d = (grey[y * w + x] - background[y * w + x]).toInt()
-                if (d > PIXEL_DELTA || d < -PIXEL_DELTA) cellChanged[c]++
+                val g = grey[y * w + x].toInt() and 0xFF
+                means[c] = means[c] + g
+                counts[c]++
             }
         }
-        // Scenery absorbs everything slowly, wherever it came from: a person
-        // who stands still becomes background in about ten seconds, which is
-        // what lets a recording end.
-        for (i in background.indices) {
-            val b = background[i].toInt() and 0xFF
-            val g = grey[i].toInt() and 0xFF
-            background[i] = (b + (g - b) / BG_RATE).toByte()
+        for (c in means.indices) {
+            if (counts[c] > 0) {
+                means[c] = means[c] / counts[c]
+            }
         }
 
-        // Active cells, then blobs of connected active cells (8-connected).
-        val activeCell = BooleanArray(gw * gh)
-        for (c in cellChanged.indices) {
-            activeCell[c] = cellChanged[c] >= 3 && cellChanged[c] * CELL_FILL >= cellArea[c]
+        var bg = cellBg
+        if (bg == null || gridW != gw || gridH != gh || bg.size != means.size) {
+            cellBg = means          // first frame, or the frame shape moved
+            gridW = gw
+            gridH = gh
+            return
         }
-        val blobOf = IntArray(gw * gh) { -1 }   // cell -> blob index
+
+        // Changed cells, and the global-rejection check: an exposure step or a
+        // scene cut moves every cell at once, which is scenery, not motion.
+        val changed = BooleanArray(means.size)
+        var changedCount = 0
+        for (c in means.indices) {
+            val d = Math.abs(means[c] - bg[c])
+            changed[c] = d > CELL_DELTA
+            if (changed[c]) changedCount++
+        }
+        if (changedCount > means.size * GLOBAL_SKIP) {
+            cellBg = means.copyOf()
+            active = false
+            synchronized(zones) { zones.forEach { it.level = 0 } }
+            return
+        }
+
+        // Scenery absorbs slowly, wherever it came from: a person who stands
+        // still becomes background in about twenty seconds, which is what
+        // lets a recording end.
+        for (c in bg.indices) {
+            bg[c] += (means[c] - bg[c]) / BG_RATE
+        }
+
+        // Blobs of connected changed cells (8-connected).
+        val blobOf = IntArray(means.size) { -1 }
         val blobSizes = ArrayList<Int>()
-        for (start in 0 until gw * gh) {
-            if (!activeCell[start] || blobOf[start] >= 0) continue
+        for (start in means.indices) {
+            if (!changed[start] || blobOf[start] >= 0) continue
             val id = blobSizes.size
             var size = 0
             val stack = ArrayDeque<Int>()
@@ -268,7 +290,7 @@ class Motion {
                     val ny = cy + dy
                     if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue
                     val n = ny * gw + nx
-                    if (activeCell[n] && blobOf[n] < 0) {
+                    if (changed[n] && blobOf[n] < 0) {
                         blobOf[n] = id
                         stack.add(n)
                     }
@@ -286,7 +308,7 @@ class Motion {
                 var biggest = 0
                 for ((id, size) in blobSizes.withIndex()) {
                     if (size <= biggest) continue
-                    for (c in 0 until gw * gh) {
+                    for (c in 0 until means.size) {
                         if (blobOf[c] != id) continue
                         if (inside(zone.points, (c % gw + 0.5) / gw, (c / gw + 0.5) / gh)) {
                             biggest = size
