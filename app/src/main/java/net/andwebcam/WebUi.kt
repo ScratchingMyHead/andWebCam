@@ -85,7 +85,7 @@ object WebUi {
  .vrow .zslider { margin-left:auto }
  .zhdr { display:flex; align-items:center; gap:8px; margin:6px 0 2px; font-size:11px; color:#889 }
  .zhdr span:first-child { width:24px; flex:0 0 auto; text-align:center }
- .zhdr span:nth-child(2) { width:110px; margin-left:auto; margin-right:42px; text-align:center }
+ .zhdr span:nth-child(2) { width:110px; margin-left:auto; margin-right:42px; text-align:left }
  .zhdr span:last-child { display:none }
  .vrow input[type=range] { padding:0 }
  .vrow a { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:5px 9px; font-size:12px; text-decoration:none }
