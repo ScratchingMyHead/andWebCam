@@ -87,6 +87,9 @@ class HttpServer(
         /** Seconds of quiet after the last motion before a recording ends. */
         fun setMotionQuiet(seconds: Int)
 
+        /** The cell-change sensitivity, 0-100, higher = more sensitive. */
+        fun setMotionLevel(level: Int)
+
         /** The recordings' share of the free space, in percent. Null on success. */
         fun setRecordingCap(percent: Int): String?
 
@@ -512,6 +515,14 @@ class HttpServer(
                 if (role != Role.ADMIN) unauthorized(output) else {
                     val vals = parseFlatJson(String(body))
                     host.setMotionQuiet(vals["seconds"]?.toIntOrNull() ?: 30)
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                }
+            }
+
+            method == "POST" && path == "/api/motion/level" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    host.setMotionLevel(vals["level"]?.toIntOrNull() ?: 85)
                     respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                 }
             }

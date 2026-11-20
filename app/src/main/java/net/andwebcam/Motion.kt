@@ -43,11 +43,18 @@ class Motion {
     companion object {
         private const val TAG = "andWebCam"
         private const val ANALYSE_EVERY_MS = 200L   // ~5 fps is plenty for motion
-        private const val CELL_DELTA = 10.0         // grey levels of cell-mean change that count
         private const val GLOBAL_SKIP = 0.5         // most of the frame changing = exposure, not motion
         private const val COOLDOWN_MS = 5000L       // quiet time between triggers
         private const val TARGET_W = 320            // analysis frame width
         private const val BG_RATE = 32              // background absorbs 1/32 per tick (~20 s)
+
+        /**
+         * The user's 0-100 trigger sensitivity as a cell-mean threshold in
+         * grey levels: 100 demands only 4 levels of change (very sensitive),
+         * 0 demands 44 (a spotlight on the moon). The stored default of 85
+         * sits at 10, where the fixed threshold used to be.
+         */
+        fun cellDelta(): Double = 44.0 - Prefs.motionLevel * 0.4
 
         /**
          * Blob size in cells that the top of the sensitivity slider asks
@@ -139,6 +146,13 @@ class Motion {
 
     /** Seconds of quiet after the last motion before a motion recording ends. */
     fun quietSeconds(): Int = Prefs.motionQuiet
+
+    /** The configured trigger sensitivity, 0-100, higher = more sensitive. */
+    fun triggerLevel(): Int = Prefs.motionLevel
+
+    fun setTriggerLevel(v: Int) {
+        Prefs.motionLevel = v
+    }
 
     fun setQuiet(seconds: Int) {
         Prefs.motionQuiet = seconds
@@ -259,7 +273,7 @@ class Motion {
         var changedCount = 0
         for (c in means.indices) {
             val d = Math.abs(means[c] - bg[c])
-            changed[c] = d > CELL_DELTA
+            changed[c] = d > cellDelta()
             if (changed[c]) changedCount++
         }
         if (changedCount > means.size * GLOBAL_SKIP) {

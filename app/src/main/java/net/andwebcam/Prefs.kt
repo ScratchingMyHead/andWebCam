@@ -40,6 +40,7 @@ object Prefs {
     private const val KEY_MOTION_ENABLED = "motion_enabled"
     private const val KEY_MOTION_ZONES = "motion_zones"
     private const val KEY_MOTION_QUIET = "motion_quiet"
+    private const val KEY_MOTION_LEVEL = "motion_level"
 
     private const val KEY_ADMIN_USER = "admin_user"
     private const val KEY_PASS_PLAIN = "pass_plain"
@@ -217,6 +218,16 @@ object Prefs {
     var motionQuiet: Int
         get() = sp.getInt(KEY_MOTION_QUIET, 30)
         set(v) = edit { putInt(KEY_MOTION_QUIET, v.coerceIn(5, 300)) }
+
+    /**
+     * How much a cell's brightness must shift against its background before
+     * the cell counts as changed, as a 0-100 sensitivity: higher is more
+     * sensitive. The stored value is the sensitivity; the engine maps it to
+     * the actual grey-level threshold.
+     */
+    var motionLevel: Int
+        get() = sp.getInt(KEY_MOTION_LEVEL, 85)
+        set(v) = edit { putInt(KEY_MOTION_LEVEL, v.coerceIn(0, 100)) }
 
     // ---- admin credentials ------------------------------------------------
 

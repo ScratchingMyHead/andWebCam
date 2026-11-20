@@ -252,6 +252,11 @@ object WebUi {
         <label>Keep recording for <span id="v_quiet">30</span> seconds</label>
         <input id="s_quiet" type="number" min="5" max="300" step="1">
       </div>
+      <h2>Trigger level</h2>
+      <div class="row">
+        <label>Sensitivity: <span id="v_level">85</span> &mdash; how much a cell must change to count as movement</label>
+        <input id="s_level" type="range" min="0" max="100" step="1">
+      </div>
       <h2>Activation zones</h2>
       <div class="actions">
         <button id="zoneAdd" class="secondary">Add</button>
@@ -1164,6 +1169,8 @@ function motionTick() {
     if (document.activeElement !== el('s_quiet')) { el('s_quiet').value = d.quiet || 30; }
     el('v_quiet').textContent = d.quiet || 30;
     el('s_quiet').disabled = !!d.enabled;
+    if (document.activeElement !== el('s_level')) { el('s_level').value = d.level == null ? 85 : d.level; }
+    el('v_level').textContent = d.level == null ? 85 : d.level;
     drawZones();
     buildZoneList(d);
   }).catch(function() {});
@@ -1335,6 +1342,16 @@ el('s_quiet').onchange = function() {
   this.value = v;
   el('v_quiet').textContent = v;
   post('/api/motion/quiet', { seconds: v });
+};
+// The trigger level is the movement magnitude a cell must show before it
+// counts: higher catches smaller and subtler movement, lower ignores it.
+el('s_level').oninput = function() { el('v_level').textContent = this.value; };
+el('s_level').onchange = function() {
+  var v = parseInt(this.value, 10) || 85;
+  v = Math.max(0, Math.min(100, v));
+  this.value = v;
+  el('v_level').textContent = v;
+  post('/api/motion/level', { level: v });
 };
 
 // The zone overlay is an SVG stretched over the picture itself, so drawing

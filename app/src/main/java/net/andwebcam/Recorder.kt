@@ -105,6 +105,7 @@ class Recorder(private val ctx: Context) {
     private var dir: Uri? = null
     private var tree: Uri? = null
     private var startTs = ""
+    private var triggerPrefix = "video"
     private var t0Ms = 0L
     private var lastPtsUs = -1L
     private var sentAnyInput = false
@@ -131,12 +132,12 @@ class Recorder(private val ctx: Context) {
      * null when it was accepted (it starts asynchronously on the worker) or
      * a sentence saying why not.
      */
-    fun start(w: Int, h: Int): String? {
+    fun start(w: Int, h: Int, prefix: String = "video"): String? {
         synchronized(this) {
             if (recording || starting) return null
             starting = true
         }
-        jobs.offer { doStart(w, h) }
+        jobs.offer { doStart(w, h, prefix) }
         return null
     }
 
@@ -208,7 +209,7 @@ class Recorder(private val ctx: Context) {
         val d = Saf.findDoc(cr, t, t, VIDEOS_DIR)
         val kids = if (d != null) Saf.listChildren(cr, t, d) else emptyList()
         val videos = kids
-            .filter { it.name.endsWith(".mp4") && !it.name.endsWith(".tmp.mp4") }
+            .filter { isVideoName(it.name) }
             .sortedBy { it.name }
             .map { c ->
                 mapOf(
@@ -226,8 +227,16 @@ class Recorder(private val ctx: Context) {
     }
 
     /** Delete a finished video by name. Only names the app itself makes. */
+    /**
+     * A finished recording: "video-" for sessions started by hand and
+     * "zone<N>-" for ones a motion zone started.
+     */
+    private fun isVideoName(name: String): Boolean =
+        name.endsWith(".mp4") && !name.endsWith(".tmp.mp4") &&
+            (name.startsWith("video-") || Regex("^zone\\d+-").containsMatchIn(name))
+
     fun delete(name: String): String? {
-        if (!name.startsWith("video-") || !name.endsWith(".mp4")) return "no such video"
+        if (!isVideoName(name)) return "no such video"
         val t = Saf.tree ?: return "no folder has been chosen"
         val d = Saf.findDoc(cr, t, t, VIDEOS_DIR) ?: return "no videos folder"
         val doc = Saf.findDoc(cr, t, d, name) ?: return "no such video"
@@ -250,7 +259,7 @@ class Recorder(private val ctx: Context) {
         if (recording) return "a recording is running; stop it first"
         var n = 0
         for (c in Saf.listChildren(cr, t, d)) {
-            if (!c.name.startsWith("video-") || !c.name.endsWith(".mp4")) continue
+            if (!isVideoName(c.name)) continue
             if (Saf.deleteDoc(cr, c.doc)) n++ else Log.w(TAG, "could not delete ${c.name}")
         }
         durationCache.clear()
@@ -270,7 +279,7 @@ class Recorder(private val ctx: Context) {
     }
 
     fun videoFile(name: String): File? {
-        if (!name.startsWith("video-") || !name.endsWith(".mp4")) return null
+        if (!isVideoName(name)) return null
         val t = Saf.tree ?: return null
         val d = Saf.findDoc(cr, t, t, VIDEOS_DIR) ?: return null
         val c = Saf.listChildren(cr, t, d).firstOrNull { it.name == name } ?: return null
@@ -284,16 +293,16 @@ class Recorder(private val ctx: Context) {
      // unless a session has taken over - so a failed start never blocks the
      * next one, and a second start request cannot sneak in behind the first.
      */
-    private fun doStart(w: Int, h: Int) {
+    private fun doStart(w: Int, h: Int, prefix: String) {
         if (recording) return
         try {
-            beginSession(w, h)
+            beginSession(w, h, prefix)
         } finally {
             if (!recording) starting = false
         }
     }
 
-    private fun beginSession(w: Int, h: Int) {
+    private fun beginSession(w: Int, h: Int, prefix: String = "video") {
         val t = Saf.tree
         if (t == null) {
             note("Choose a storage location on the phone first: recordings go into its video subfolder.")
@@ -316,7 +325,8 @@ class Recorder(private val ctx: Context) {
         existingBytes = prune(d, t, capBytes, 0L)
 
         startTs = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
-        val tempName = "rec-$startTs.tmp.mp4"
+        triggerPrefix = prefix
+        val tempName = "$prefix-$startTs.tmp.mp4"
         val doc = Saf.findDoc(cr, t, d, tempName) ?: Saf.createDoc(cr, d, tempName, "*/*")
         if (doc == null) {
             note("The recording file could not be created.")
@@ -561,7 +571,7 @@ class Recorder(private val ctx: Context) {
      */
     private fun prune(d: Uri, t: Uri, cap: Long?, inFlight: Long): Long {
         val kids = Saf.listChildren(cr, t, d)
-            .filter { it.name.endsWith(".mp4") && !it.name.endsWith(".tmp.mp4") }
+            .filter { isVideoName(it.name) }
         var used = kids.sumOf { it.size }
         if (cap == null) return used
         val limit = (cap * STOP_MARGIN).toLong()
@@ -641,7 +651,7 @@ class Recorder(private val ctx: Context) {
         val pd = dir
         val tr = tree
         if (d == null || pd == null || tr == null) return 2
-        val finalName = "video-$startTs.mp4"
+        val finalName = "$triggerPrefix-$startTs.mp4"
         return if (Saf.renameDoc(cr, tr, pd, d, finalName) != null) {
             savedName = finalName
             Log.i(TAG, "recording saved as $finalName (${fmtSize(writtenBytes)})")

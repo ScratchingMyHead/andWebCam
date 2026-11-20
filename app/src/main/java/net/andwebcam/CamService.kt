@@ -149,7 +149,7 @@ class CamService : Service(), HttpServer.Host {
             val err = if (recorder.recording) "recording already running" else null
             if (err == null) {
                 val s = camera.currentSize
-                recorder.start(s.width, s.height)
+                recorder.start(s.width, s.height, "zone$zone")
                 motionOwned = true
                 quietUntil = System.currentTimeMillis() + motion.quietSeconds() * 1000L
                 Log.i(TAG, "motion recording started (zone $zone)")
@@ -798,6 +798,7 @@ class CamService : Service(), HttpServer.Host {
         return mapOf(
             "enabled" to motion.enabled,
             "quiet" to motion.quietSeconds(),
+            "level" to motion.triggerLevel(),
             "aspect" to motion.zoneAspect(),
             "zones" to zones,
         )
@@ -807,6 +808,10 @@ class CamService : Service(), HttpServer.Host {
 
     override fun setMotionQuiet(seconds: Int) {
         motion.setQuiet(seconds)
+    }
+
+    override fun setMotionLevel(level: Int) {
+        motion.setTriggerLevel(level)
     }
 
     override fun setRecordingCap(percent: Int): String? {
