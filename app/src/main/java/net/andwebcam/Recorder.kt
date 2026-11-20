@@ -210,7 +210,7 @@ class Recorder(private val ctx: Context) {
         val kids = if (d != null) Saf.listChildren(cr, t, d) else emptyList()
         val videos = kids
             .filter { isVideoName(it.name) }
-            .sortedBy { it.name }
+            .sortedWith(compareBy({ nameOrder(it.name) }, { it.name }))
             .map { c ->
                 mapOf(
                     "name" to c.name,
@@ -234,6 +234,13 @@ class Recorder(private val ctx: Context) {
     private fun isVideoName(name: String): Boolean =
         name.endsWith(".mp4") && !name.endsWith(".tmp.mp4") &&
             (name.startsWith("video-") || Regex("^zone\\d+-").containsMatchIn(name))
+
+    /**
+     * Chronological order for a recording, whatever started it: the name is
+     * "<prefix>-<yyyyMMdd-HHmmss>.mp4", and the prefix must not affect where
+     * the row sorts.
+     */
+    private fun nameOrder(name: String): String = name.substringAfter('-')
 
     fun delete(name: String): String? {
         if (!isVideoName(name)) return "no such video"
@@ -576,7 +583,7 @@ class Recorder(private val ctx: Context) {
         if (cap == null) return used
         val limit = (cap * STOP_MARGIN).toLong()
         // The name carries the start time, newest last: oldest goes first.
-        for (victim in kids.sortedBy { it.name }) {
+        for (victim in kids.sortedWith(compareBy({ nameOrder(it.name) }, { it.name }))) {
             if (used + inFlight < limit) break
             if (Saf.deleteDoc(cr, victim.doc)) {
                 used -= victim.size
