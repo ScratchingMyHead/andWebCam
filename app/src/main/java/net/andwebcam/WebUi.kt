@@ -89,6 +89,9 @@ object WebUi {
  .zhdr span:nth-child(2) { text-align:left }
  .zrow .zslider { width:100%; margin-left:0 }
  .sensscale { display:flex; justify-content:space-between; font-size:11px; color:#889; margin:-4px 0 8px }
+ .dbg { font-family:monospace; font-size:11px; color:#9aa; background:#0d0d0d; border:1px solid #222; border-radius:6px; padding:6px 8px; max-height:190px; overflow:auto; line-height:1.5 }
+ .dbg .dbgline { white-space:pre-wrap }
+ .dbg .hi { color:#e8b; }
  .zrow button { padding:5px 9px; font-size:12px }
  .zrow button svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
  .vrow input[type=range] { padding:0 }
@@ -282,6 +285,8 @@ object WebUi {
       <div class="zhdr"><span>ID</span><span>Trigger level</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
       <div id="zoneList"><p class="hint">No zones yet.</p></div>
+      <h2>Debug</h2>
+      <div id="motionDebug" class="dbg"><p class="hint">No activations yet.</p></div>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
@@ -978,6 +983,7 @@ var recPoll = null;
 var motionPoll = null;
 var recCount = 0;
 var recListKey = '';
+var motionDbgKey = -1;
 var recPlaying = null;
 var recNoteSeen = null;
 var recNoteArmed = false;
@@ -1227,11 +1233,38 @@ function motionTick() {
     el('v_grid').textContent = d.grid || 32;
     drawZones();
     buildZoneList(d);
+    renderMotionDebug(d.events || []);
   }).catch(function() {});
 }
 
-function buildZoneList(d) {
-  var list = el('zoneList');
+// Activation events from the phone: one line whenever the strongest zone's
+// level rises by more than two points. Newest first.
+function renderMotionDebug(events) {
+  var box = el('motionDebug');
+  var last = events.length ? events[events.length - 1].t : 0;
+  if (last === motionDbgKey) { return; }
+  motionDbgKey = last;
+  if (!events.length) {
+    box.innerHTML = '<p class="hint">No activations yet.</p>';
+    return;
+  }
+  var out = '';
+  for (var i = events.length - 1; i >= 0; i--) {
+    var e = events[i];
+    var d = new Date(e.t);
+    var tm = [d.getHours(), d.getMinutes(), d.getSeconds()].map(function(n) {
+      return (n < 10 ? '0' : '') + n;
+    }).join(':') + '.' + ('00' + d.getMilliseconds()).slice(-3);
+    out += '<div class="dbgline"><span class="hi">' + tm + '</span>  ' +
+      e.overall + '%  changed ' + e.changed + '/' + e.cells +
+      '  shift ' + e.shift + '  peak ' + e.peak +
+      '  biggest ' + e.biggest +
+      (e.zones ? '  ' + e.zones : '') + '</div>';
+  }
+  box.innerHTML = out;
+}
+
+function buildZoneList(d) {  var list = el('zoneList');
   var zones = d.zones || [];
   if (zones.length !== zoneRowsBuiltFor) {
     list.innerHTML = '';

@@ -107,6 +107,10 @@ class Motion {
     @Volatile private var diagSkip = false
     private var lastDiagLog = 0L
 
+    /** Recent activation events: overall level jumped by more than 2 points. */
+    private val events = ArrayDeque<Map<String, Any>>()
+    private var lastOverall = 0
+
     fun diagnostics(): Map<String, Any> = mapOf(
         "changed" to diagChanged,
         "cells" to diagCells,
@@ -115,6 +119,9 @@ class Motion {
         "biggest" to diagBiggest,
         "skip" to diagSkip,
     )
+
+    /** Newest activation event last; a small ring buffer for the debug pane. */
+    fun eventLog(): List<Map<String, Any>> = synchronized(events) { events.toList() }
 
     fun zoneCount(): Int = synchronized(zones) { zones.size }
 
@@ -241,6 +248,7 @@ class Motion {
         thread = null
         latest.set(null)
         active = false
+        lastOverall = 0
         synchronized(zones) { zones.forEach { it.level = 0 } }
     }
 
@@ -335,6 +343,7 @@ class Motion {
             cellBg = means.copyOf()
             active = false
             synchronized(zones) { zones.forEach { it.level = 0 } }
+            lastOverall = 0
             record(changedCount, means.size, median, peak, 0, true, "")
             return
         }
@@ -382,6 +391,7 @@ class Motion {
         val fired = ArrayList<Int>()
         val mb = maxBlob(gw, gh)
         var biggestAny = 0
+        var overall = 0
         val levels = StringBuilder()
         synchronized(zones) {
             for ((index, zone) in zones.withIndex()) {
@@ -400,6 +410,7 @@ class Motion {
                 // Slider scale: level is the sensitivity that would fire on
                 // this blob, so the fill reaching the handle means firing.
                 zone.level = ((biggest * 100) / mb).coerceIn(0, 100)
+                if (zone.level > overall) overall = zone.level
                 val need = 1 + (zone.sensitivity * (mb - 1)) / 100
                 if (levels.isNotEmpty()) levels.append(' ')
                 levels.append("z${index + 1}=$biggest")
@@ -415,6 +426,27 @@ class Motion {
         }
         active = nowActive
         record(changedCount, means.size, median, peak, biggestAny, false, levels.toString())
+        // The user watches the strongest zone's level. A rise of more than
+        // two points is worth a debug line: it is an object appearing or
+        // growing, not noise hovering around zero.
+        if (overall - lastOverall > 2) {
+            synchronized(events) {
+                events.addLast(
+                    mapOf(
+                        "t" to System.currentTimeMillis(),
+                        "overall" to overall,
+                        "changed" to changedCount,
+                        "cells" to means.size,
+                        "shift" to diagShift,
+                        "peak" to diagPeak,
+                        "biggest" to biggestAny,
+                        "zones" to levels.toString(),
+                    ),
+                )
+                while (events.size > 40) events.removeFirst()
+            }
+        }
+        lastOverall = overall
         if (fired.isNotEmpty()) {
             Log.i(TAG, "motion in zone ${fired.joinToString(", ")}")
             onTrigger?.invoke(fired.first())

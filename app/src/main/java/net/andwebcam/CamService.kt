@@ -804,6 +804,7 @@ class CamService : Service(), HttpServer.Host {
             "grid" to motion.gridSize(),
             "aspect" to motion.zoneAspect(),
             "zones" to zones,
+            "events" to motion.eventLog(),
         )
     }
 
