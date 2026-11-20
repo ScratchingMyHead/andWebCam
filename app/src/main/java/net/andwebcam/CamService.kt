@@ -794,6 +794,7 @@ class CamService : Service(), HttpServer.Host {
                 "id" to it.id,
                 "sensitivity" to it.sensitivity,
                 "level" to it.level,
+                "peak" to it.peak,
                 "points" to it.points.map { p -> listOf(p.first, p.second) },
             )
         }

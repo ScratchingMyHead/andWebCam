@@ -1328,7 +1328,7 @@ function buildZoneList(d) {  var list = el('zoneList');
     var s = list.querySelector('input[data-id="' + z.id + '"]');
     if (!s) { return; }
     if (document.activeElement !== s) { s.value = z.sensitivity; }
-    paintLevel(s, z.level);
+    paintLevel(s, Math.max(z.level || 0, z.peak || 0));
   });
   el('zoneClear').classList.toggle('hidden', !zones.length || !!drawing);
 }

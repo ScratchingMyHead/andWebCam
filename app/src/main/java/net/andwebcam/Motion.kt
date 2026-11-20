@@ -48,6 +48,7 @@ class Motion {
         private const val ANALYSE_EVERY_MS = 200L   // ~5 fps is plenty for motion
         private const val GLOBAL_SKIP = 0.5         // most of the frame changing = exposure, not motion
         private const val COOLDOWN_MS = 5000L       // quiet time between triggers
+        private const val PEAK_HOLD_MS = 6000L      // how long a level spike stays visible
         private const val TARGET_W = 320            // analysis frame width
         private const val BG_RATE = 32              // background absorbs 1/32 per tick (~20 s)
 
@@ -71,6 +72,8 @@ class Motion {
     /** A parsed zone with its live state. */
     class Zone(val sensitivity: Int, val points: List<Pair<Double, Double>>) {
         var level = 0            // largest blob seen in the zone, on the slider's scale
+        var peak = 0             // highest level recently, held so polls cannot miss it
+        var peakAt = 0L          // when peak was last raised
     }
 
     /** Invoked when a zone fires; argument is the zone's 1-based position. */
@@ -132,10 +135,10 @@ class Motion {
      * A stable copy of the zone list for the page: 1-based id, sensitivity,
      * normalized points and the live level.
      */
-    class Snapshot(val id: Int, val sensitivity: Int, val points: List<Pair<Double, Double>>, val level: Int)
+    class Snapshot(val id: Int, val sensitivity: Int, val points: List<Pair<Double, Double>>, val level: Int, val peak: Int)
 
     fun snapshot(): List<Snapshot> = synchronized(zones) {
-        zones.mapIndexed { i, z -> Snapshot(i + 1, z.sensitivity, z.points, z.level) }
+        zones.mapIndexed { i, z -> Snapshot(i + 1, z.sensitivity, z.points, z.level, z.peak) }
     }
 
     // ---- configuration ----------------------------------------------------
@@ -249,7 +252,7 @@ class Motion {
         latest.set(null)
         active = false
         lastOverall = 0
-        synchronized(zones) { zones.forEach { it.level = 0 } }
+        synchronized(zones) { zones.forEach { it.level = 0; it.peak = 0; it.peakAt = 0L } }
     }
 
     // ---- the analysis -----------------------------------------------------
@@ -410,7 +413,17 @@ class Motion {
                 // Slider scale: level is the sensitivity that would fire on
                 // this blob, so the fill reaching the handle means firing.
                 zone.level = ((biggest * 100) / mb).coerceIn(0, 100)
-                if (zone.level > overall) overall = zone.level
+                // Keep the recent peak for a few seconds: the page polls over
+                // a flaky link, and a level that spikes between two polls is
+                // still worth showing, even if a little late.
+                val nowMs = System.currentTimeMillis()
+                if (zone.level > zone.peak) {
+                    zone.peak = zone.level
+                    zone.peakAt = nowMs
+                } else if (nowMs - zone.peakAt > PEAK_HOLD_MS) {
+                    zone.peak = zone.level
+                }
+                if (zone.peak > overall) overall = zone.peak
                 val need = 1 + (zone.sensitivity * (mb - 1)) / 100
                 if (levels.isNotEmpty()) levels.append(' ')
                 levels.append("z${index + 1}=$biggest")
