@@ -77,6 +77,13 @@ class CamService : Service(), HttpServer.Host {
     private lateinit var server: HttpServer
     private val ring = VideoRing()
     private val recorder = Recorder(this)
+    private val motion = Motion()
+
+    /** True while the running recording was started by motion, not by hand. */
+    private var motionOwned = false
+
+    /** When the motion recording ends if no further motion is seen. */
+    private var quietUntil = 0L
     private var mdns: Mdns? = null
     private var wakeLock: PowerManager.WakeLock? = null
     private var multicastLock: WifiManager.MulticastLock? = null
@@ -92,7 +99,7 @@ class CamService : Service(), HttpServer.Host {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val cameraRetry = Runnable {
-        if (started && (recorder.recording || (streamingEnabled && hub.count > 0))) camera.start()
+        if (started && (recorder.recording || motion.enabled || (streamingEnabled && hub.count > 0))) camera.start()
     }
     /**
      * Close the camera and end the ring's run of frames. The pre-roll must
@@ -105,7 +112,7 @@ class CamService : Service(), HttpServer.Host {
     }
 
     private val idleStop = Runnable {
-        if (started && hub.count == 0 && !recorder.recording) {
+        if (started && hub.count == 0 && !recorder.recording && !motion.enabled) {
             Log.i(TAG, "no viewers; closing camera to save power")
             closeCamera()
             updateNotification()
@@ -119,6 +126,7 @@ class CamService : Service(), HttpServer.Host {
         hub = StreamHub()
         recorder.ringRef = ring
         recorder.onStopped = {
+            motionOwned = false
             // The camera may now be the last reason to stay open.
             mainHandler.post {
                 if (!started) return@post
@@ -126,7 +134,7 @@ class CamService : Service(), HttpServer.Host {
                 if (hub.count == 0) {
                     if (streamingEnabled) {
                         mainHandler.postDelayed(idleStop, 5000)
-                    } else if (camera.active) {
+                    } else if (camera.active && !motion.enabled) {
                         Log.i(TAG, "recording finished and no viewers; closing camera")
                         closeCamera()
                     }
@@ -134,12 +142,27 @@ class CamService : Service(), HttpServer.Host {
                 updateNotification()
             }
         }
+        // A zone firing is a request for a recording with the seconds before
+        // it in the file: the ring supplies those. A recording that is already
+        // running - by hand, say - is left alone.
+        motion.onTrigger = { zone ->
+            val err = if (recorder.recording) "recording already running" else null
+            if (err == null) {
+                val s = camera.currentSize
+                recorder.start(s.width, s.height)
+                motionOwned = true
+                quietUntil = System.currentTimeMillis() + motion.quietSeconds() * 1000L
+                Log.i(TAG, "motion recording started (zone $zone)")
+            }
+            mainHandler.post { updateNotification() }
+        }
         camera = CameraController(
             this,
             onFrame = { jpeg ->
                 if (State.lastError != null) State.lastError = null
                 ring.push(jpeg)
                 recorder.push(jpeg)
+                motion.push(jpeg)
                 hub.broadcast(jpeg)
             },
             onError = { msg ->
@@ -241,7 +264,28 @@ class CamService : Service(), HttpServer.Host {
                     State.framesPerSec = (f - lastFrameCount).toInt().coerceAtLeast(0)
                     lastFrameCount = f
                     State.frames = f
+                    // A motion recording runs on while motion is seen, and ends
+                    // after the quiet period once it is not.
+                    if (motionOwned && recorder.recording) {
+                        if (motion.active) {
+                            quietUntil = System.currentTimeMillis() + motion.quietSeconds() * 1000L
+                        } else if (System.currentTimeMillis() >= quietUntil) {
+                            Log.i(TAG, "motion quiet; ending the recording")
+                            motionOwned = false
+                            recorder.stop()
+                        }
+                    }
                 }, 1, 1, TimeUnit.SECONDS)
+            }
+        }
+        motion.resume()
+        if (motion.enabled) {
+            // Monitoring survives restarts: the camera is one of the reasons
+            // the service has to be doing something.
+            mainHandler.post {
+                if (!camera.active) camera.start()
+                updateLocks(hub.count > 0 || motion.enabled)
+                updateNotification()
             }
         }
         started = true
@@ -262,6 +306,17 @@ class CamService : Service(), HttpServer.Host {
                 if (previous == 0L) "" else ", previous run " + ago(previous) +
                     (if (clean) " ended cleanly" else " ended unexpectedly"),
         )
+    }
+
+    /**
+     * The aspect ratio of the frame after its EXIF turn: what the viewer and
+     * the zone drawing actually see. 0 when the resolution is unreadable.
+     */
+    private fun rotatedAspect(resolution: String, orientation: Int): Double {
+        val parts = resolution.split('x')
+        val w = parts.getOrNull(0)?.toDoubleOrNull() ?: return 0.0
+        val h = parts.getOrNull(1)?.toDoubleOrNull() ?: return 0.0
+        return if (((orientation % 180) + 180) % 180 == 90) h / w else w / h
     }
 
     private fun ago(ms: Long): String =
@@ -435,7 +490,7 @@ class CamService : Service(), HttpServer.Host {
         mainHandler.post {
             if (!started) return@post
             mainHandler.removeCallbacks(idleStop)
-            updateLocks(count > 0)
+            updateLocks(count > 0 || motion.enabled)
             if (count > 0) {
                 if (streamingEnabled && !camera.active) {
                     Log.i(TAG, "viewer connected; opening camera")
@@ -457,10 +512,11 @@ class CamService : Service(), HttpServer.Host {
             hub.disconnectAll()
             mainHandler.removeCallbacks(idleStop)
             // The webcam is off, so it stops recording too; the file is
-            // finished first, and the camera closes when that is done.
+            // finished first, and the camera stays open only for motion.
             if (recorder.recording) recorder.stop()
-            else closeCamera()
+            else if (!motion.enabled) closeCamera()
         }
+        updateLocks(hub.count > 0 || motion.enabled)
         updateNotification()
     }
 
@@ -519,6 +575,12 @@ class CamService : Service(), HttpServer.Host {
             // even with the pane closed.
             "recording" to recorder.recording,
             "recNote" to recorder.lastNote,
+            // Motion state for the banner and the pane: how many zones are
+            // set and what aspect they were drawn for, so a resolution change
+            // can warn before it invalidates them.
+            "motion" to motion.enabled,
+            "motionZones" to motion.zoneCount(),
+            "motionAspect" to motion.zoneAspect(),
             "autoStartStreaming" to Prefs.autoStartStreaming,
             "lastError" to State.lastError,
             // The folder holding the on-disk copy of the log; null while none
@@ -536,6 +598,8 @@ class CamService : Service(), HttpServer.Host {
     override fun applySettings(vals: Map<String, String>) {
         var restartCamera = false
         var restartNet = false
+        val oldResolution = Prefs.resolution
+        val oldOrientation = Prefs.orientation
         for ((k, v) in vals) {
             when (k) {
                 "facing" -> if (Prefs.facing != v) { Prefs.facing = v; restartCamera = true }
@@ -550,6 +614,19 @@ class CamService : Service(), HttpServer.Host {
                 "streaming" -> setStreaming(v.toBoolean())
                 "serviceName" -> if (Prefs.serviceName != v.lowercase()) { Prefs.serviceName = v; restartNet = true }
                 "port" -> v.toIntOrNull()?.let { if (it != Prefs.port) { Prefs.port = it; restartNet = true } }
+            }
+        }
+        // Zones are drawn in the displayed frame's coordinates. A change that
+        // keeps the aspect ratio leaves them valid; anything else invalidates
+        // them, so they go - the page warns first.
+        if ((restartCamera || oldOrientation != Prefs.orientation) && motion.zoneCount() > 0) {
+            val oldAspect = rotatedAspect(oldResolution, oldOrientation)
+            val newAspect = rotatedAspect(Prefs.resolution, Prefs.orientation)
+            if (oldAspect != 0.0 && newAspect != 0.0 &&
+                Math.abs(oldAspect - newAspect) / Math.max(oldAspect, newAspect) > 0.01
+            ) {
+                motion.clearZones()
+                Log.i(TAG, "zones cleared: the aspect ratio changed")
             }
         }
         if (restartCamera) {
@@ -669,6 +746,41 @@ class CamService : Service(), HttpServer.Host {
 
     override fun stopRecording() = recorder.stop()
 
+    override fun setMotion(on: Boolean): String? {
+        val err = motion.setEnabled(on)
+        if (err == null) {
+            mainHandler.post {
+                if (motion.enabled && !camera.active) camera.start()
+                updateLocks(hub.count > 0 || motion.enabled)
+                updateNotification()
+            }
+        }
+        return err
+    }
+
+    override fun motionInfo(): Map<String, Any?> {
+        val zones = motion.snapshot().map {
+            mapOf(
+                "id" to it.id,
+                "sensitivity" to it.sensitivity,
+                "level" to it.level,
+                "points" to it.points.map { p -> listOf(p.first, p.second) },
+            )
+        }
+        return mapOf(
+            "enabled" to motion.enabled,
+            "quiet" to motion.quietSeconds(),
+            "aspect" to motion.zoneAspect(),
+            "zones" to zones,
+        )
+    }
+
+    override fun saveMotionZones(zones: String): String? = motion.setZones(zones)
+
+    override fun setMotionQuiet(seconds: Int) {
+        motion.setQuiet(seconds)
+    }
+
     override fun setRecordingCap(percent: Int): String? {
         if (percent !in 1..100) return "the cap is between 1 and 100 percent"
         Prefs.videoCapPercent = percent
@@ -764,7 +876,7 @@ class CamService : Service(), HttpServer.Host {
             !streamingEnabled -> "Streaming stopped - open ${State.url}"
             camera.active -> "Streaming at ${State.url}"
             else -> "Idle (no viewers) - ${State.url}"
-        }
+        } + if (motion.enabled) " - motion on" else ""
         return Notification.Builder(this, CH_ID)
             .setContentTitle("andWebCam")
             .setContentText(text)

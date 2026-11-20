@@ -37,6 +37,9 @@ object Prefs {
     private const val KEY_LOG_FOLDER = "log_folder"
     private const val KEY_LAST_MIRROR_LINE = "last_mirror_line"
     private const val KEY_VIDEO_CAP_PERCENT = "video_cap_percent"
+    private const val KEY_MOTION_ENABLED = "motion_enabled"
+    private const val KEY_MOTION_ZONES = "motion_zones"
+    private const val KEY_MOTION_QUIET = "motion_quiet"
 
     private const val KEY_ADMIN_USER = "admin_user"
     private const val KEY_PASS_PLAIN = "pass_plain"
@@ -192,6 +195,28 @@ object Prefs {
     var videoCapPercent: Int
         get() = sp.getInt(KEY_VIDEO_CAP_PERCENT, 10)
         set(v) = edit { putInt(KEY_VIDEO_CAP_PERCENT, v.coerceIn(1, 100)) }
+
+    /**
+     * Motion activation. Enabled survives service restarts and reboots: the
+     * service resumes monitoring on start when a storage location is chosen.
+     * The zones are a compact string in the camera's normalized coordinates -
+     * "aspect;sens:x,y,x,y,...;sens:..." - so the same zones work at any
+     * resolution with the same aspect ratio.
+     */
+    var motionEnabled: Boolean
+        get() = sp.getBoolean(KEY_MOTION_ENABLED, false)
+        set(v) = edit { putBoolean(KEY_MOTION_ENABLED, v) }
+
+    var motionZones: String?
+        get() = sp.getString(KEY_MOTION_ZONES, null)
+        set(v) {
+            if (v == null) edit { remove(KEY_MOTION_ZONES) } else edit { putString(KEY_MOTION_ZONES, v) }
+        }
+
+    /** Seconds of quiet after the last motion before a motion recording ends. */
+    var motionQuiet: Int
+        get() = sp.getInt(KEY_MOTION_QUIET, 30)
+        set(v) = edit { putInt(KEY_MOTION_QUIET, v.coerceIn(5, 300)) }
 
     // ---- admin credentials ------------------------------------------------
 

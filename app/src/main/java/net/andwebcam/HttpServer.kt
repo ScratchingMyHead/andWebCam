@@ -69,6 +69,21 @@ class HttpServer(
         /** Stops the running session; the file is finalized asynchronously. */
         fun stopRecording()
 
+        /** Arms or disarms motion activation; null when accepted, else why not. */
+        fun setMotion(on: Boolean): String?
+
+        /**
+         * The motion pane's data: enabled flag, the quiet period, and each
+         * zone with its points, sensitivity and live level.
+         */
+        fun motionInfo(): Map<String, Any?>
+
+        /** Replaces the zones; null when accepted, else why not. */
+        fun saveMotionZones(zones: String): String?
+
+        /** Seconds of quiet after the last motion before a recording ends. */
+        fun setMotionQuiet(seconds: Int)
+
         /** The recordings' share of the free space, in percent. Null on success. */
         fun setRecordingCap(percent: Int): String?
 
@@ -437,6 +452,44 @@ class HttpServer(
             method == "GET" && path == "/api/record/list" -> {
                 if (role != Role.ADMIN) unauthorized(output) else {
                     respond(output, 200, "application/json", jsonBytes(host.recordingInfo()))
+                }
+            }
+
+            // Motion activation: arm it, read the zones with their live
+            // levels, replace the zones, set the quiet period. All admin; the
+            // zones' shape belongs to whoever draws them.
+            method == "POST" && path == "/api/motion/set" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    val err = host.setMotion(vals["enabled"]?.toBoolean() ?: false)
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(mapOf("ok" to (err == null), "error" to err)),
+                    )
+                }
+            }
+
+            method == "GET" && path == "/api/motion/list" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    respond(output, 200, "application/json", jsonBytes(host.motionInfo()))
+                }
+            }
+
+            method == "POST" && path == "/api/motion/zones" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val err = host.saveMotionZones(String(body))
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(mapOf("ok" to (err == null), "error" to err)),
+                    )
+                }
+            }
+
+            method == "POST" && path == "/api/motion/quiet" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    host.setMotionQuiet(vals["seconds"]?.toIntOrNull() ?: 30)
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                 }
             }
 

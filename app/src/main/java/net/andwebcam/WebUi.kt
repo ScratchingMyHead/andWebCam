@@ -75,6 +75,12 @@ object WebUi {
  .vmeta { font-size:11px; color:#889; white-space:nowrap }
  .vrow button { padding:5px 9px; font-size:12px }
  .vrow button svg, .vrow a svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
+ #zones { position:absolute; z-index:3; pointer-events:none }
+ #zones polygon, #zones polyline, #zones circle, #zones text { vector-effect:non-scaling-stroke }
+ .zslider { -webkit-appearance:none; appearance:none; width:110px; height:8px; border-radius:4px; background:#243038; outline:none; cursor:pointer }
+ .zslider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
+ .zslider::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
+ .vrow input[type=range] { padding:0 }
  .vrow a { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:5px 9px; font-size:12px; text-decoration:none }
  .vrow a:hover { background:#3d3d3d }
  .modal { position:fixed; inset:0; z-index:60; background:#000c; display:flex; align-items:center; justify-content:center; padding:16px }
@@ -104,7 +110,7 @@ object WebUi {
   </span>
   <button id="paneToggle" class="iconbtn hidden" title="Hide the settings pane" aria-label="Settings"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg></button>
   <button id="recPaneToggle" class="iconbtn hidden" title="Show the recording pane" aria-label="Recording"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="6" fill="#f44336" stroke="none"/></svg></button>
-<button id="zonesPaneToggle" class="iconbtn hidden" title="Show the zones pane" aria-label="Zones"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="12 3.5 19.8 7.75 19.8 16.25 12 20.5 4.2 16.25 4.2 7.75"/></svg></button>
+<button id="motionPaneToggle" class="iconbtn hidden" title="Show the motion pane" aria-label="Motion activation"><svg viewBox="0 0 24 24" aria-hidden="true"><polyline points="3 12 8 12 11 5 14 19 17 12 21 12"/></svg></button>
 <button id="logoutBtn" class="iconbtn hidden" title="Log out" aria-label="Log out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg></button>
   <button id="loginBtn" class="iconbtn" title="Log in" aria-label="Log in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg></button>
 </header>
@@ -120,6 +126,7 @@ object WebUi {
   <div class="content">
     <div class="video loading" id="video">
       <img id="vid" alt="">
+      <svg id="zones" class="hidden" preserveAspectRatio="none" viewBox="0 0 1000 1000"></svg>
       <div class="vload">Loading video...</div>
       <div id="busy" class="busy hidden"><span class="spin"></span><span id="busyText">Applying...</span></div>
       <div id="stopped" class="overlay hidden"><div>Streaming is stopped</div><div id="stoppedHint" style="font-size:12px"></div></div>
@@ -228,12 +235,26 @@ object WebUi {
       </div>
       <p class="hint"><a href="#" id="dlHelp">Problems downloading?</a></p>
     </div>
-    <div class="panel hidden" id="zonesPane">
-      <h2>Zones</h2>
+    <div class="panel hidden" id="motionPane">
+      <h2>Motion activation</h2>
       <div class="actions">
-        <button id="zonesPaneClose" class="paneClose" title="Hide the zones pane" aria-label="Hide the zones pane">&raquo;</button>
+        <button id="motionBtn">Start motion</button>
+        <button id="motionPaneClose" class="paneClose" title="Hide the motion pane" aria-label="Hide the motion pane">&raquo;</button>
       </div>
-      <p class="hint">Motion zones will appear here.</p>
+      <p class="err hidden" id="motionMsg"></p>
+      <h2>After motion stops</h2>
+      <div class="row">
+        <label>Keep recording for <span id="v_quiet">30</span> seconds</label>
+        <input id="s_quiet" type="number" min="5" max="300" step="1">
+      </div>
+      <h2>Activation zones</h2>
+      <div class="actions">
+        <button id="zoneAdd" class="secondary">Add</button>
+        <button id="zoneSave" class="secondary hidden">Save</button>
+        <button id="zoneCancel" class="secondary hidden">Cancel</button>
+      </div>
+      <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
+      <div id="zoneList"><p class="hint">No zones yet.</p></div>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
@@ -395,6 +416,7 @@ function panLimits() {
 }
 function applyPan() {
   el('vid').style.transform = (panX || panY) ? 'translate(' + panX + 'px,' + panY + 'px)' : '';
+  placeZones();
 }
 function updatePan() {
   var l = panLimits();
@@ -428,7 +450,7 @@ for (var i = 0; i < scaleBtns.length; i++) {
 el('vid').ondragstart = function() { return false; };
 el('video').addEventListener('pointerdown', function(e) {
   var l = panLimits();
-  if ((l.x < 1 && l.y < 1) || !el('stopped').classList.contains('hidden')) { return; }
+  if (drawing || (l.x < 1 && l.y < 1) || !el('stopped').classList.contains('hidden')) { return; }
   drag = { x: e.clientX, y: e.clientY, px: panX, py: panY };
   el('video').classList.add('grabbing');
   try { el('video').setPointerCapture(e.pointerId); } catch (err) {}
@@ -471,8 +493,8 @@ el('video').addEventListener('wheel', function(e) {
     applyPan();
   }
 }, { passive: false });
-el('vid').addEventListener('load', updatePan);
-window.addEventListener('resize', updatePan);
+el('vid').addEventListener('load', function() { updatePan(); drawZones(); });
+window.addEventListener('resize', function() { updatePan(); drawZones(); });
 // Camera changes take a moment to show up in the stream and there is no
 // dependable signal for exactly when they do, so show a spinner from the moment
 // the control is used until shortly after the phone acknowledges it.
@@ -521,8 +543,10 @@ function refresh() {
     el('who').textContent = s.admin ? 'admin' : (s.anonView ? 'view-only' : 'locked');
     el('who').className = 'badge ' + (s.admin ? '' : (s.anonView ? 'anon' : 'locked'));
     el('who').title = s.auth ? 'Signed in with ' + s.auth : '';
-    el('i_state').textContent = s.locked ? 'Locked'
-      : (!s.streaming ? 'Stopped' : (s.cameraActive ? 'Streaming' : 'Idle (no viewers)'));
+    var st = s.locked ? 'locked'
+      : (!s.streaming ? 'streaming off' : (s.cameraActive ? 'streaming' : 'idle (no viewers)'));
+    if (s.motion) { st += ', motion on'; }
+    el('i_state').textContent = st;
     el('i_cam').textContent = s.facing || '-';
     el('i_res').textContent = (s.width || '?') + 'x' + (s.height || '?');
     el('i_fps').textContent = (s.fpsActive || 0) + ' / ' + (s.fps || '?') + ' fps';
@@ -583,7 +607,23 @@ function refresh() {
   });
 }
 el('s_facing').onchange = function() { setSetting('facing', this.value); };
-el('s_res').onchange = function() { setSetting('resolution', this.value); };
+el('s_res').onchange = function() {
+  // Zones are drawn for the aspect ratio they were made in: a resolution
+  // with a different one invalidates them, so say so before it happens.
+  var s = window.S || {};
+  if ((s.motionZones || 0) > 0 && s.motionAspect) {
+    var parts = this.value.split('x');
+    var newA = (parseFloat(parts[0]) / parseFloat(parts[1])) || 0;
+    if (newA && Math.abs(s.motionAspect - newA) / Math.max(s.motionAspect, newA) > 0.01) {
+      if (!confirm('This resolution has a different aspect ratio: the ' + s.motionZones +
+          ' drawn zone' + (s.motionZones === 1 ? '' : 's') + ' will be cleared. Continue?')) {
+        this.value = s.width + 'x' + s.height;
+        return;
+      }
+    }
+  }
+  setSetting('resolution', this.value);
+};
 el('s_fps').onchange = function() { setSetting('fps', this.value); };
 el('s_q').oninput = function() { el('v_q').textContent = this.value; };
 el('s_q').onchange = function() { setSetting('quality', this.value); };
@@ -776,8 +816,8 @@ el('doUpdate').onclick = function() {
 // The panes share one slot next to the video: opening one closes the others
 // and the choice lasts for the page: logging in or reloading always lands
 // on the settings pane, however the last visit ended.
-var PANES = { paneToggle: 'settings', recPaneToggle: 'recording', zonesPaneToggle: 'zones' };
-var PANE_TITLES = { settings: 'the settings pane', recording: 'the recording pane', zones: 'the zones pane' };
+var PANES = { paneToggle: 'settings', recPaneToggle: 'recording', motionPaneToggle: 'motion' };
+var PANE_TITLES = { settings: 'the settings pane', recording: 'the recording pane', motion: 'the motion pane' };
 var pane = 'settings';
 function applyPane() {
   var admin = !!(window.S && window.S.admin);
@@ -792,9 +832,10 @@ function applyPane() {
   }
   el('admin').classList.toggle('hidden', !(admin && open === 'settings'));
   el('recPane').classList.toggle('hidden', !(admin && open === 'recording'));
-  el('zonesPane').classList.toggle('hidden', !(admin && open === 'zones'));
+  el('motionPane').classList.toggle('hidden', !(admin && open === 'motion'));
   // The recording pane polls its own list while it is open, and the player
-  // does not keep running behind a closed one.
+  // does not keep running behind a closed one. The motion pane polls the
+  // zone levels the same way.
   if (admin && open === 'recording') {
     if (!recPoll) {
       recPoll = setInterval(recPollTick, 2500);
@@ -805,6 +846,21 @@ function applyPane() {
     recPoll = null;
     recStopPlayer();
   }
+  if (admin && open === 'motion') {
+    if (!motionPoll) {
+      motionPoll = setInterval(motionTick, 1000);
+      motionTick();
+    }
+    el('zones').classList.remove('hidden');
+    drawZones();
+  } else {
+    if (motionPoll) {
+      clearInterval(motionPoll);
+      motionPoll = null;
+    }
+    el('zones').classList.add('hidden');
+    if (drawing) { drawing = null; updateDrawUi(); }
+  }
   updatePan();
 }
 function openPane(which) {
@@ -814,8 +870,8 @@ function openPane(which) {
 }
 el('paneToggle').onclick = function() { openPane('settings'); };
 el('recPaneToggle').onclick = function() { openPane('recording'); };
-el('zonesPaneToggle').onclick = function() { openPane('zones'); };
-el('paneClose').onclick = el('recPaneClose').onclick = el('zonesPaneClose').onclick = function() {
+el('motionPaneToggle').onclick = function() { openPane('motion'); };
+el('paneClose').onclick = el('recPaneClose').onclick = el('motionPaneClose').onclick = function() {
   pane = 'hidden';
   applyPane();
 };
@@ -849,6 +905,7 @@ el('l_pass').addEventListener('keydown', loginKey);
 // The list is polled on its own timer, only while the pane is open (applyPane
 // starts and stops it), because every poll lists the folder on the phone.
 var recPoll = null;
+var motionPoll = null;
 var recPlaying = null;
 var recNoteSeen = null;
 var recNoteArmed = false;
@@ -1024,6 +1081,251 @@ function recRefresh() {
   }).catch(function() {});
 }
 function recPollTick() { recRefresh(); }
+// ---- Motion activation ----------------------------------------------------
+// Zones are polygons in normalized coordinates, so they work at any
+// resolution with the aspect ratio they were drawn for. The list is polled
+// once a second while the pane is open, which both refreshes the zone list
+// and moves the live level fill on each slider.
+var motionData = null;
+var drawing = null;             // points of the zone being drawn
+var zoneRowsBuiltFor = -1;
+
+function motionMsg(text) {
+  var m = el('motionMsg');
+  m.textContent = text || '';
+  m.classList.toggle('hidden', !text);
+  if (text) {
+    clearTimeout(motionMsg.t);
+    motionMsg.t = setTimeout(function() { motionMsg(''); }, 8000);
+  }
+}
+
+function motionTick() {
+  if (!(window.S && window.S.admin)) { return; }
+  if (el('motionPane').classList.contains('hidden')) { return; }
+  fetch('/api/motion/list').then(function(r) { return r.json(); }).then(function(d) {
+    motionData = d;
+    var b = el('motionBtn');
+    b.disabled = !window.S.logFolder;
+    b.textContent = d.enabled ? 'Stop motion' : 'Start motion';
+    if (document.activeElement !== el('s_quiet')) { el('s_quiet').value = d.quiet || 30; }
+    el('v_quiet').textContent = d.quiet || 30;
+    el('s_quiet').disabled = !!d.enabled;
+    drawZones();
+    buildZoneList(d);
+  }).catch(function() {});
+}
+
+function buildZoneList(d) {
+  var list = el('zoneList');
+  var zones = d.zones || [];
+  if (zones.length !== zoneRowsBuiltFor) {
+    list.innerHTML = '';
+    zoneRowsBuiltFor = zones.length;
+    if (!zones.length) {
+      var p = document.createElement('p');
+      p.className = 'hint';
+      p.textContent = 'No zones yet.';
+      list.appendChild(p);
+    }
+    zones.forEach(function(z) {
+      var row = document.createElement('div');
+      row.className = 'vrow';
+      var name = document.createElement('span');
+      name.className = 'vname';
+      name.textContent = 'Zone ' + z.id;
+      var slider = document.createElement('input');
+      slider.type = 'range';
+      slider.min = 0;
+      slider.max = 100;
+      slider.className = 'zslider';
+      slider.setAttribute('aria-label', 'Sensitivity of zone ' + z.id);
+      slider.dataset.id = z.id;
+      slider.value = z.sensitivity;
+      slider.onchange = function() { saveZones(); };
+      var del = document.createElement('button');
+      del.className = 'secondary';
+      del.innerHTML = ICON_BIN;
+      del.title = 'Delete';
+      del.setAttribute('aria-label', 'Delete zone ' + z.id);
+      del.onclick = function() {
+        if (!confirm('Delete zone ' + z.id + '?')) { return; }
+        var left = ((motionData || {}).zones || [])
+          .filter(function(x) { return x.id !== z.id; })
+          .map(function(x) { return { sensitivity: x.sensitivity, points: x.points }; });
+        saveZones(left);
+      };
+      row.appendChild(name);
+      row.appendChild(slider);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+  // The meters move without a rebuild, so a slider being dragged is not
+  // pulled out from under the finger: the fill is the live level, the handle
+  // is the sensitivity threshold, and red means the zone is firing.
+  zones.forEach(function(z) {
+    var s = list.querySelector('input[data-id="' + z.id + '"]');
+    if (!s) { return; }
+    if (document.activeElement !== s) { s.value = z.sensitivity; }
+    paintLevel(s, z.level);
+  });
+}
+
+function paintLevel(s, level) {
+  var color = level >= (parseInt(s.value, 10) || 0) ? '#e53935' : '#2b6cb0';
+  s.style.background = 'linear-gradient(to right, ' + color + ' 0%, ' + color + ' ' +
+    Math.max(level, 2) + '%, #243038 ' + Math.max(level, 2) + '%, #1a1a1a 100%)';
+}
+
+// The zone set is sent in the compact form the phone stores:
+// "aspect;sens:x,y,x,y,...;sens:...".
+function zonesPayload(list) {
+  var d = motionData || {};
+  var parts = [(d.aspect || 1.7778).toFixed(4)];
+  list.forEach(function(z) {
+    parts.push((z.sensitivity || 0) + ':' + z.points.map(function(p) {
+      return Number(p[0]).toFixed(4) + ',' + Number(p[1]).toFixed(4);
+    }).join(','));
+  });
+  return parts.join(';');
+}
+
+function saveZones(list) {
+  var d = motionData || { zones: [] };
+  var payload = list || (d.zones || []).map(function(z) {
+    return { sensitivity: z.sensitivity, points: z.points };
+  });
+  fetch('/api/motion/zones', {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: zonesPayload(payload),
+  }).then(function(r) { return r.json(); }).then(function(res) {
+    if (res.ok === false) { motionMsg(res.error || 'Could not save the zones'); }
+    motionTick();
+  }).catch(function() { motionMsg('No answer from the phone.'); });
+}
+
+function updateDrawUi() {
+  var d = !!drawing;
+  el('zoneAdd').classList.toggle('hidden', d);
+  el('zoneSave').classList.toggle('hidden', !d);
+  el('zoneCancel').classList.toggle('hidden', !d);
+  el('zoneSave').disabled = !drawing || drawing.length < 3;
+  el('drawHint').classList.toggle('hidden', !d);
+}
+
+el('zoneAdd').onclick = function() {
+  // A zone is drawn on live video: with streaming off there is nothing to
+  // see, so switching it on here is the same as pressing its button.
+  if (!(window.S && window.S.streaming)) { setSetting('streaming', 'true'); }
+  drawing = [];
+  updateDrawUi();
+  drawZones();
+};
+el('zoneCancel').onclick = function() { drawing = null; updateDrawUi(); drawZones(); };
+el('zoneSave').onclick = function() {
+  if (!drawing || drawing.length < 3) { return; }
+  var d = motionData || { zones: [] };
+  var list = (d.zones || []).map(function(z) {
+    return { sensitivity: z.sensitivity, points: z.points };
+  });
+  list.push({ sensitivity: 50, points: drawing });
+  drawing = null;
+  updateDrawUi();
+  saveZones(list);
+};
+
+el('motionBtn').onclick = function() {
+  var b = el('motionBtn');
+  if (b.disabled) { return; }
+  b.disabled = true;
+  post('/api/motion/set', { enabled: !((motionData || {}).enabled) }).then(function(r) {
+    if (r.ok === false) { motionMsg(r.error || 'Could not change motion'); }
+    b.disabled = !window.S.logFolder;
+    motionTick();
+  }).catch(function() { b.disabled = false; motionMsg('No answer from the phone.'); });
+};
+
+el('s_quiet').oninput = function() { el('v_quiet').textContent = this.value; };
+el('s_quiet').onchange = function() {
+  var v = parseInt(this.value, 10) || 30;
+  v = Math.max(5, Math.min(300, v));
+  this.value = v;
+  el('v_quiet').textContent = v;
+  post('/api/motion/quiet', { seconds: v });
+};
+
+// The zone overlay is an SVG stretched over the picture itself, so drawing
+// and panning share one coordinate space.
+function placeZones() {
+  var s = el('zones');
+  var img = el('vid'), c = el('video');
+  var r = img.getBoundingClientRect(), cr = c.getBoundingClientRect();
+  if (!r.width || !r.height || s.classList.contains('hidden')) { return; }
+  s.style.left = (r.left - cr.left) + 'px';
+  s.style.top = (r.top - cr.top) + 'px';
+  s.style.width = r.width + 'px';
+  s.style.height = r.height + 'px';
+}
+
+function centroidOf(points) {
+  var x = 0, y = 0;
+  points.forEach(function(p) { x += p[0]; y += p[1]; });
+  return [x / points.length, y / points.length];
+}
+
+function drawZones() {
+  var s = el('zones');
+  var zones = (motionData || {}).zones || [];
+  if (!zones.length && !drawing) {
+    s.classList.add('hidden');
+    s.innerHTML = '';
+    return;
+  }
+  placeZones();
+  var out = [];
+  zones.forEach(function(z) {
+    var pts = z.points.map(function(p) {
+      return (p[0] * 1000).toFixed(1) + ',' + (p[1] * 1000).toFixed(1);
+    }).join(' ');
+    var firing = z.level >= z.sensitivity;
+    out.push('<polygon points="' + pts + '" fill="rgba(255,82,82,' +
+      (firing ? 0.35 : 0.12) + ')" stroke="' + (firing ? '#ff1744' : '#ff8a80') +
+      '" stroke-width="3"/>');
+    var c = centroidOf(z.points);
+    out.push('<text x="' + (c[0] * 1000).toFixed(0) + '" y="' + (c[1] * 1000).toFixed(0) +
+      '" fill="#fff" font-size="60" text-anchor="middle" dominant-baseline="middle">' +
+      z.id + '</text>');
+  });
+  if (drawing && drawing.length) {
+    out.push('<polyline points="' + drawing.map(function(p) {
+      return (p[0] * 1000).toFixed(1) + ',' + (p[1] * 1000).toFixed(1);
+    }).join(' ') + '" fill="none" stroke="#7cc4ff" stroke-width="3"/>');
+    drawing.forEach(function(p) {
+      out.push('<circle cx="' + (p[0] * 1000).toFixed(1) + '" cy="' + (p[1] * 1000).toFixed(1) +
+        '" r="8" fill="#7cc4ff"/>');
+    });
+  }
+  s.innerHTML = out.join('');
+  s.classList.remove('hidden');
+}
+
+// A click inside the picture adds a point while a zone is being drawn; the
+// pan gesture stands down for the duration.
+el('video').addEventListener('pointerdown', function(e) {
+  if (!drawing) { return; }
+  var r = el('vid').getBoundingClientRect();
+  if (!r.width) { return; }
+  drawing.push([
+    Math.round(Math.max(0, Math.min(1, (e.clientX - r.left) / r.width)) * 10000) / 10000,
+    Math.round(Math.max(0, Math.min(1, (e.clientY - r.top) / r.height)) * 10000) / 10000,
+  ]);
+  updateDrawUi();
+  drawZones();
+  e.preventDefault();
+});
+
 // Why a browser may refuse to download, and the one-time way out.
 el('dlHelp').onclick = function(e) {
   e.preventDefault();
