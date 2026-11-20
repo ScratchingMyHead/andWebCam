@@ -11,27 +11,30 @@ import android.util.Log
  * The analysis runs on a small greyscale copy of the frame at a fraction of
  * the stream's rate, as a pipeline:
  *
- * 1. **Cell means.** The frame is divided into a 32x18 grid (18x32 in
- *    portrait) of 10-pixel cells and each cell's mean luminance is taken.
- *    Averaging 100 pixels crushes sensor noise by ten times, which is what
- *    keeps high-ISO static out of the trigger - a blur would do the same job
- *    less well and with an extra pass.
+ * 1. **Cell means.** The frame is divided into a grid of square-ish cells
+ *    (32 across the long edge by default) and each cell's mean luminance is
+ *    taken. Averaging many pixels crushes sensor noise, which is what keeps
+ *    high-ISO static out of the trigger - a blur would do the same job less
+ *    well and with an extra pass.
  * 2. **Background.** Each cell keeps a running average of what it usually
  *    looks like, absorbing change over about twenty seconds: someone who
  *    stands still becomes scenery eventually, which is what lets a recording
  *    end, and slow exposure drift is not mistaken for motion.
- * 3. **Global rejection.** When more than half the cells change in the same
- *    tick, that is an exposure step or a scene cut, not motion: the
- *    background is re-seated and the tick is skipped.
+ * 3. **Exposure correction.** The median cell change is subtracted from every
+ *    cell before comparing. A camera exposure step darkens or brightens the
+ *    whole frame together, so it leaves almost no residual; a white car on a
+ *    dark fence does not, so it is not thrown away with the exposure change.
+ *    If more than half the cells still change after that, it really is a
+ *    scene cut: the background is re-seated and the tick is skipped.
  * 4. **Blobs.** Connected changed cells (8-connected) are grouped, and a
  *    blob's size in cells is the size of the object, independent of how big
  *    the zone around it is.
  *
  * A zone (a polygon in normalized coordinates) fires when it contains a blob
  * of at least the size its sensitivity asks for: sensitivity 0 accepts a
- * single cell, 100 demands a 15-cell object. Because the threshold is in
- * cells, the same head triggers the same way in a doorway-sized zone or a
- * room-sized one.
+ * single cell, 100 demands the biggest object the slider scale describes
+ * (about a tenth of the frame). Because the threshold is a fraction of the
+ * grid, the same head triggers the same way at any grid size.
  *
  * Zones arrive as the compact string Prefs stores:
  * "aspect;sens:x,y,x,y,...;sens:...". The same per-zone state feeds the
@@ -59,10 +62,10 @@ class Motion {
         /**
          * Blob size in cells that the top of the sensitivity slider asks
          * for - about a tenth of the frame, i.e. a person at room distance.
-         * The slider maps 0-100 onto 1..[MAX_BLOB] cells, so its whole range
-         * spans the objects that actually move in front of this camera.
+         * The slider maps 0-100 onto 1..this, so it keeps its meaning when
+         * the grid is made finer or coarser.
          */
-        private const val MAX_BLOB = 60
+        fun maxBlob(gw: Int, gh: Int): Int = Math.max(4, gw * gh * 60 / 576)
     }
 
     /** A parsed zone with its live state. */
@@ -94,6 +97,24 @@ class Motion {
         private set
 
     private var lastTrigger = 0L
+
+    // Latest tick's numbers, for the log and /api/status while tuning.
+    @Volatile private var diagChanged = 0
+    @Volatile private var diagCells = 0
+    @Volatile private var diagShift = 0
+    @Volatile private var diagPeak = 0
+    @Volatile private var diagBiggest = 0
+    @Volatile private var diagSkip = false
+    private var lastDiagLog = 0L
+
+    fun diagnostics(): Map<String, Any> = mapOf(
+        "changed" to diagChanged,
+        "cells" to diagCells,
+        "shift" to diagShift,
+        "peak" to diagPeak,
+        "biggest" to diagBiggest,
+        "skip" to diagSkip,
+    )
 
     fun zoneCount(): Int = synchronized(zones) { zones.size }
 
@@ -152,6 +173,13 @@ class Motion {
 
     fun setTriggerLevel(v: Int) {
         Prefs.motionLevel = v
+    }
+
+    /** Grid cells across the long edge, 4-160; the next tick picks it up. */
+    fun gridSize(): Int = Prefs.motionGrid
+
+    fun setGrid(cells: Int) {
+        Prefs.motionGrid = cells
     }
 
     fun setQuiet(seconds: Int) {
@@ -239,8 +267,18 @@ class Motion {
         w = turned.second
         h = turned.third
 
-        val gw = if (w >= h) 32 else 18
-        val gh = if (w >= h) 18 else 32
+        // The grid follows the user's setting, keeping cells roughly square
+        // and the cell count along the long edge fixed.
+        val cells = Prefs.motionGrid.coerceIn(4, 160)
+        val gw: Int
+        val gh: Int
+        if (w >= h) {
+            gw = cells
+            gh = Math.max(2, Math.round(cells * h.toFloat() / w))
+        } else {
+            gh = cells
+            gw = Math.max(2, Math.round(cells * w.toFloat() / h))
+        }
         var means = DoubleArray(gw * gh)
         val counts = IntArray(gw * gh)
         for (y in 0 until h) {
@@ -267,19 +305,37 @@ class Motion {
             return
         }
 
-        // Changed cells, and the global-rejection check: an exposure step or a
-        // scene cut moves every cell at once, which is scenery, not motion.
+        // Change is measured against the running background, with the median
+        // change of the whole frame removed. That median is the camera's
+        // exposure moving (a bright car makes the AE darken everything a
+        // little): it is scenery-wide, so subtracting it keeps a car from
+        // taking the whole tick with it.
         val changed = BooleanArray(means.size)
+        val deltas = DoubleArray(means.size)
+        for (c in means.indices) deltas[c] = means[c] - bg[c]
+        val sorted = deltas.copyOf()
+        sorted.sort()
+        val median = if (sorted.size % 2 == 1) {
+            sorted[sorted.size / 2]
+        } else {
+            (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
+        }
         var changedCount = 0
+        var peak = 0.0
         for (c in means.indices) {
-            val d = Math.abs(means[c] - bg[c])
+            val d = Math.abs(deltas[c] - median)
+            if (d > peak) peak = d
             changed[c] = d > cellDelta()
             if (changed[c]) changedCount++
         }
+
+        // Even after the exposure correction, most of the frame changing is
+        // a scene cut rather than motion: re-seat the background and skip.
         if (changedCount > means.size * GLOBAL_SKIP) {
             cellBg = means.copyOf()
             active = false
             synchronized(zones) { zones.forEach { it.level = 0 } }
+            record(changedCount, means.size, median, peak, 0, true, "")
             return
         }
 
@@ -324,6 +380,9 @@ class Motion {
         // the zone's polygon; the zone's level is its biggest such blob.
         var nowActive = false
         val fired = ArrayList<Int>()
+        val mb = maxBlob(gw, gh)
+        var biggestAny = 0
+        val levels = StringBuilder()
         synchronized(zones) {
             for ((index, zone) in zones.withIndex()) {
                 var biggest = 0
@@ -337,10 +396,13 @@ class Motion {
                         }
                     }
                 }
+                if (biggest > biggestAny) biggestAny = biggest
                 // Slider scale: level is the sensitivity that would fire on
                 // this blob, so the fill reaching the handle means firing.
-                zone.level = ((biggest * 100) / MAX_BLOB).coerceIn(0, 100)
-                val need = 1 + (zone.sensitivity * (MAX_BLOB - 1)) / 100
+                zone.level = ((biggest * 100) / mb).coerceIn(0, 100)
+                val need = 1 + (zone.sensitivity * (mb - 1)) / 100
+                if (levels.isNotEmpty()) levels.append(' ')
+                levels.append("z${index + 1}=$biggest")
                 if (biggest >= need) {
                     nowActive = true
                     val now = System.currentTimeMillis()
@@ -352,10 +414,42 @@ class Motion {
             }
         }
         active = nowActive
+        record(changedCount, means.size, median, peak, biggestAny, false, levels.toString())
         if (fired.isNotEmpty()) {
             Log.i(TAG, "motion in zone ${fired.joinToString(", ")}")
             onTrigger?.invoke(fired.first())
         }
+    }
+
+    /**
+     * Keep the latest tick's numbers and, at most once a second, write a line
+     * when something happened. A static scene stays silent, so a car going by
+     * is easy to find in the log afterwards.
+     */
+    private fun record(
+        changed: Int,
+        total: Int,
+        median: Double,
+        peak: Double,
+        biggest: Int,
+        skip: Boolean,
+        levels: String,
+    ) {
+        diagChanged = changed
+        diagCells = total
+        diagShift = Math.round(median).toInt()
+        diagPeak = Math.round(peak).toInt()
+        diagBiggest = biggest
+        diagSkip = skip
+        val now = System.currentTimeMillis()
+        if ((!skip && changed == 0) || now - lastDiagLog < 1000) return
+        lastDiagLog = now
+        Log.i(
+            TAG,
+            "motion tick: changed $changed/$total shift $diagShift peak $diagPeak " +
+                "biggest $biggest${if (levels.isEmpty()) "" else " $levels"}" +
+                (if (skip) " (skipped)" else ""),
+        )
     }
 
     private fun inside(points: List<Pair<Double, Double>>, x: Double, y: Double): Boolean {

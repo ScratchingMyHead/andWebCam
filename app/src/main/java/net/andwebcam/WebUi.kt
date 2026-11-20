@@ -266,6 +266,12 @@ object WebUi {
         <input id="s_level" type="range" min="0" max="100" step="1">
       </div>
       <div class="sensscale"><span>Less sensitive</span><span>More sensitive</span></div>
+      <h2>Grid size</h2>
+      <div class="row">
+        <label>Cells across the long edge: <span id="v_grid">32</span></label>
+        <input id="s_grid" type="range" min="4" max="160" step="1">
+      </div>
+      <div class="sensscale"><span>Bigger cells</span><span>Smaller cells</span></div>
       <h2>Activation zones</h2>
       <div class="actions">
         <button id="zoneAdd" class="secondary">Add</button>
@@ -1217,6 +1223,8 @@ function motionTick() {
     el('v_quiet').textContent = d.quiet || 30;
     if (document.activeElement !== el('s_level')) { el('s_level').value = d.level == null ? 85 : d.level; }
     el('v_level').textContent = d.level == null ? 85 : d.level;
+    if (document.activeElement !== el('s_grid')) { el('s_grid').value = d.grid || 32; }
+    el('v_grid').textContent = d.grid || 32;
     drawZones();
     buildZoneList(d);
   }).catch(function() {});
@@ -1398,6 +1406,16 @@ el('s_level').onchange = function() {
   this.value = v;
   el('v_level').textContent = v;
   post('/api/motion/level', { level: v });
+};
+// Grid size: the number of cells across the long edge. Smaller cells see
+// finer detail (and more noise); the zone sliders scale with the grid.
+el('s_grid').oninput = function() { el('v_grid').textContent = this.value; };
+el('s_grid').onchange = function() {
+  var v = parseInt(this.value, 10) || 32;
+  v = Math.max(4, Math.min(160, v));
+  this.value = v;
+  el('v_grid').textContent = v;
+  post('/api/motion/grid', { grid: v });
 };
 
 // The zone overlay is an SVG stretched over the picture itself, so drawing

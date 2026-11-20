@@ -609,6 +609,8 @@ class CamService : Service(), HttpServer.Host {
             "motion" to motion.enabled,
             "motionZones" to motion.zoneCount(),
             "motionAspect" to motion.zoneAspect(),
+            // Latest analysis-tick numbers, for tuning from a distance.
+            "motionDiag" to motion.diagnostics(),
             "autoStartStreaming" to Prefs.autoStartStreaming,
             "lastError" to State.lastError,
             // The folder holding the on-disk copy of the log; null while none
@@ -799,6 +801,7 @@ class CamService : Service(), HttpServer.Host {
             "enabled" to motion.enabled,
             "quiet" to motion.quietSeconds(),
             "level" to motion.triggerLevel(),
+            "grid" to motion.gridSize(),
             "aspect" to motion.zoneAspect(),
             "zones" to zones,
         )
@@ -812,6 +815,10 @@ class CamService : Service(), HttpServer.Host {
 
     override fun setMotionLevel(level: Int) {
         motion.setTriggerLevel(level)
+    }
+
+    override fun setMotionGrid(cells: Int) {
+        motion.setGrid(cells)
     }
 
     override fun setRecordingCap(percent: Int): String? {

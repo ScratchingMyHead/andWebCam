@@ -90,6 +90,9 @@ class HttpServer(
         /** The cell-change sensitivity, 0-100, higher = more sensitive. */
         fun setMotionLevel(level: Int)
 
+        /** Motion grid cells across the long edge, 4-160. */
+        fun setMotionGrid(cells: Int)
+
         /** The recordings' share of the free space, in percent. Null on success. */
         fun setRecordingCap(percent: Int): String?
 
@@ -523,6 +526,14 @@ class HttpServer(
                 if (role != Role.ADMIN) unauthorized(output) else {
                     val vals = parseFlatJson(String(body))
                     host.setMotionLevel(vals["level"]?.toIntOrNull() ?: 85)
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                }
+            }
+
+            method == "POST" && path == "/api/motion/grid" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    host.setMotionGrid((vals["grid"]?.toIntOrNull() ?: 32).coerceIn(4, 160))
                     respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                 }
             }

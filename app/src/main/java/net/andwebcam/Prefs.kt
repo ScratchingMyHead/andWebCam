@@ -41,6 +41,7 @@ object Prefs {
     private const val KEY_MOTION_ZONES = "motion_zones"
     private const val KEY_MOTION_QUIET = "motion_quiet"
     private const val KEY_MOTION_LEVEL = "motion_level"
+    private const val KEY_MOTION_GRID = "motion_grid"
 
     private const val KEY_ADMIN_USER = "admin_user"
     private const val KEY_PASS_PLAIN = "pass_plain"
@@ -228,6 +229,16 @@ object Prefs {
     var motionLevel: Int
         get() = sp.getInt(KEY_MOTION_LEVEL, 85)
         set(v) = edit { putInt(KEY_MOTION_LEVEL, v.coerceIn(0, 100)) }
+
+    /**
+     * Motion grid size: the number of cells across the long edge of the
+     * frame. 32 is the long-standing default; tiny values give coarse
+     * blocks, large values give fine cells that see more detail (and more
+     * sensor noise).
+     */
+    var motionGrid: Int
+        get() = sp.getInt(KEY_MOTION_GRID, 32)
+        set(v) = edit { putInt(KEY_MOTION_GRID, v.coerceIn(4, 160)) }
 
     // ---- admin credentials ------------------------------------------------
 
