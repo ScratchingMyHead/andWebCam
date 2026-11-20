@@ -5,38 +5,52 @@ import android.graphics.BitmapFactory
 import android.util.Log
 
 /**
- * Motion activation: watches the stream's own JPEG frames for change inside
- * user-drawn zones, and says when a zone fires.
+ * Motion activation: watches the stream's own JPEG frames for objects moving
+ * inside user-drawn zones, and says when a zone fires.
  *
- * The analysis deliberately runs at a fraction of the stream's rate and on a
- * tiny greyscale copy of the frame - a decode a couple of hundred pixels wide
- * every fifth frame costs a few milliseconds - so a phone can monitor all
- * night. Each zone is a polygon in normalized coordinates (0..1 of the
- * *displayed* frame), so the same zones work at any resolution with the
- * aspect ratio they were drawn for.
+ * The analysis runs on a tiny greyscale copy of the frame at a fraction of
+ * the stream's rate, in four steps, which is the classic CCTV pipeline:
+ *
+ * 1. **Background model.** Each pixel keeps a running average of what it
+ *    usually looks like (about ten seconds to re-absorb a change), so
+ *    detection compares against scenery rather than against the previous
+ *    frame: someone who stops moving stays detected, and slow exposure drift
+ *    is not mistaken for motion.
+ * 2. **Change mask.** Pixels further than a few grey levels from their
+ *    background are "changed".
+ * 3. **Cell grid.** The frame is divided into 16x9 (or 9x16) cells; a cell is
+ *    active when a quarter of its pixels changed. Scattered sensor noise
+ *    never lights a whole cell.
+ * 4. **Blobs.** Connected active cells are grouped; a blob's size in cells is
+ *    the size of the object, independent of how big the zone around it is.
+ *
+ * A zone (a polygon in normalized coordinates) fires when it contains a blob
+ * of at least the size its sensitivity asks for: sensitivity 0 accepts a
+ * single cell, 100 demands a 15-cell object. Because the threshold is in
+ * cells, the same head triggers the same way in a doorway-sized zone or a
+ * room-sized one.
  *
  * Zones arrive as the compact string Prefs stores:
- * "aspect;sens:x,y,x,y,...;sens:...". Sensitivity 0..100 maps to how small a
- * fraction of the zone must change: higher sensitivity, smaller fraction.
- *
- * A trigger is reported once per activation through [onTrigger]; the service
- * decides what that means. [active] says whether any zone is currently above
- * its threshold, which is what keeps a motion recording alive.
+ * "aspect;sens:x,y,x,y,...;sens:...". The same per-zone state feeds the
+ * page's live meters, whose scale matches the slider: the fill shows the
+ * largest blob seen in the zone, and when it reaches the handle, the zone is
+ * firing.
  */
 class Motion {
     companion object {
         private const val TAG = "andWebCam"
         private const val ANALYSE_EVERY_MS = 200L   // ~5 fps is plenty for motion
-        private const val PIXEL_DELTA = 20          // grey levels that count as changed
+        private const val PIXEL_DELTA = 20          // grey levels from background that count as change
+        private const val CELL_FILL = 4             // a cell is active at 1/4 changed pixels
         private const val COOLDOWN_MS = 5000L       // quiet time between triggers
         private const val TARGET_W = 160            // analysis frame width
+        private const val BG_RATE = 16              // background absorbs 1/16 per tick (~10 s)
+        private const val MAX_BLOB = 15             // blob size the top of the slider asks for
     }
 
     /** A parsed zone with its live state. */
     class Zone(val sensitivity: Int, val points: List<Pair<Double, Double>>) {
-        var level = 0                        // last measured change, percent of the zone
-        internal var mask = IntArray(0)      // indices of the zone's pixels in the analysis frame
-        internal var maskW = 0
+        var level = 0            // largest blob seen in the zone, on the slider's scale
     }
 
     /** Invoked when a zone fires; argument is the zone's 1-based position. */
@@ -52,14 +66,13 @@ class Motion {
     private val latest = java.util.concurrent.atomic.AtomicReference<ByteArray?>()
 
     @Volatile private var thread: Thread? = null
-    private var prevGrey: ByteArray? = null
-    private var prevW = 0
-    private var prevH = 0
-    private var lastTrigger = 0L
+    private var bg: ByteArray? = null
 
     /** Whether any zone is over its threshold right now. */
     @Volatile var active = false
         private set
+
+    private var lastTrigger = 0L
 
     fun zoneCount(): Int = synchronized(zones) { zones.size }
 
@@ -151,7 +164,7 @@ class Motion {
     @Synchronized
     private fun start() {
         if (thread?.isAlive == true) return
-        prevGrey = null
+        bg = null
         thread = Thread({
             while (enabled) {
                 val jpeg = latest.getAndSet(null)
@@ -198,68 +211,107 @@ class Motion {
         w = turned.second
         h = turned.third
 
-        val prev = prevGrey
-        val comparable = prev != null && prev.size == grey.size &&
-            synchronized(zones) { zones.isNotEmpty() && zones.all { it.maskW == w && it.mask.size > 0 } }
-        if (comparable) {
-            var nowActive = false
-            val fired = ArrayList<Int>()
-            synchronized(zones) {
-                for ((index, zone) in zones.withIndex()) {
-                    var changed = 0
-                    for (p in zone.mask) {
-                        val d = (grey[p] - prev!![p]).toInt()
-                        if (d > PIXEL_DELTA || d < -PIXEL_DELTA) changed++
+        val background = bg
+        if (background == null || background.size != grey.size) {
+            bg = grey.copyOf()   // first frame, or the frame shape moved
+            return
+        }
+
+        // The cell grid: 16x9 the landscape way round, 9x16 in portrait, so
+        // cells stay roughly square and a blob means the same object size
+        // either way.
+        val gw = if (w >= h) 16 else 9
+        val gh = if (w >= h) 9 else 16
+        val cellChanged = IntArray(gw * gh)
+        val cellArea = IntArray(gw * gh)
+        for (y in 0 until h) {
+            val cy = Math.min(gh - 1, y * gh / h)
+            val row = cy * gw
+            for (x in 0 until w) {
+                val c = row + Math.min(gw - 1, x * gw / w)
+                cellArea[c]++
+                val d = (grey[y * w + x] - background[y * w + x]).toInt()
+                if (d > PIXEL_DELTA || d < -PIXEL_DELTA) cellChanged[c]++
+            }
+        }
+        // Scenery absorbs everything slowly, wherever it came from: a person
+        // who stands still becomes background in about ten seconds, which is
+        // what lets a recording end.
+        for (i in background.indices) {
+            val b = background[i].toInt() and 0xFF
+            val g = grey[i].toInt() and 0xFF
+            background[i] = (b + (g - b) / BG_RATE).toByte()
+        }
+
+        // Active cells, then blobs of connected active cells (8-connected).
+        val activeCell = BooleanArray(gw * gh)
+        for (c in cellChanged.indices) {
+            activeCell[c] = cellChanged[c] >= 3 && cellChanged[c] * CELL_FILL >= cellArea[c]
+        }
+        val blobOf = IntArray(gw * gh) { -1 }   // cell -> blob index
+        val blobSizes = ArrayList<Int>()
+        for (start in 0 until gw * gh) {
+            if (!activeCell[start] || blobOf[start] >= 0) continue
+            val id = blobSizes.size
+            var size = 0
+            val stack = ArrayDeque<Int>()
+            stack.add(start)
+            blobOf[start] = id
+            while (stack.isNotEmpty()) {
+                val c = stack.removeLast()
+                size++
+                val cx = c % gw
+                val cy = c / gw
+                for (dy in -1..1) for (dx in -1..1) {
+                    if (dx == 0 && dy == 0) continue
+                    val nx = cx + dx
+                    val ny = cy + dy
+                    if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue
+                    val n = ny * gw + nx
+                    if (activeCell[n] && blobOf[n] < 0) {
+                        blobOf[n] = id
+                        stack.add(n)
                     }
-                    val level = (changed * 100 / zone.mask.size).coerceIn(0, 100)
-                    zone.level = level
-                    // Sensitivity 100 demands 0.5 percent of the zone to
-                    // change, 0 demands 40 percent: a curve that keeps the top
-                    // of the slider honest instead of firing on nothing.
-                    val s = zone.sensitivity / 100.0
-                    val need = (0.4 * (1 - s) * (1 - s) * 100).toInt() + 1
-                    if (level >= need) {
-                        nowActive = true
-                        val now = System.currentTimeMillis()
-                        if (now - lastTrigger > COOLDOWN_MS) {
-                            lastTrigger = now
-                            fired.add(index + 1)
+                }
+            }
+            blobSizes.add(size)
+        }
+
+        // A blob belongs to a zone when any of its cells' centres is inside
+        // the zone's polygon; the zone's level is its biggest such blob.
+        var nowActive = false
+        val fired = ArrayList<Int>()
+        synchronized(zones) {
+            for ((index, zone) in zones.withIndex()) {
+                var biggest = 0
+                for ((id, size) in blobSizes.withIndex()) {
+                    if (size <= biggest) continue
+                    for (c in 0 until gw * gh) {
+                        if (blobOf[c] != id) continue
+                        if (inside(zone.points, (c % gw + 0.5) / gw, (c / gw + 0.5) / gh)) {
+                            biggest = size
+                            break
                         }
                     }
                 }
-            }
-            active = nowActive
-            if (fired.isNotEmpty()) {
-                Log.i(TAG, "motion in zone ${fired.joinToString(", ")}")
-                onTrigger?.invoke(fired.first())
-            }
-        }
-
-        // The zone masks are rebuilt whenever the frame size moves or the
-        // zones change, so they always match this decode size.
-        rebuildMasks(w, h)
-        prevGrey = grey
-        prevW = w
-        prevH = h
-    }
-
-    private fun rebuildMasks(w: Int, h: Int) {
-        synchronized(zones) {
-            for (zone in zones) {
-                if (zone.maskW == w && zone.mask.size > 0) continue
-                val mask = ArrayList<Int>(w * h / 4)
-                // A point is inside the polygon when a ray to the left crosses
-                // an odd number of its edges.
-                for (y in 0 until h) {
-                    val ny = (y + 0.5) / h
-                    for (x in 0 until w) {
-                        val nx = (x + 0.5) / w
-                        if (inside(zone.points, nx, ny)) mask.add(y * w + x)
+                // Slider scale: level is the sensitivity that would fire on
+                // this blob, so the fill reaching the handle means firing.
+                zone.level = (((biggest - 1) * 100) / MAX_BLOB).coerceIn(0, 100)
+                val need = 1 + (zone.sensitivity * MAX_BLOB) / 100
+                if (biggest >= need) {
+                    nowActive = true
+                    val now = System.currentTimeMillis()
+                    if (now - lastTrigger > COOLDOWN_MS) {
+                        lastTrigger = now
+                        fired.add(index + 1)
                     }
                 }
-                zone.mask = mask.toIntArray()
-                zone.maskW = w
             }
+        }
+        active = nowActive
+        if (fired.isNotEmpty()) {
+            Log.i(TAG, "motion in zone ${fired.joinToString(", ")}")
+            onTrigger?.invoke(fired.first())
         }
     }
 
