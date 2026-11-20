@@ -123,7 +123,7 @@ object WebUi {
     <div class="bitem"><span class="bk">Camera</span><span class="bv" id="i_cam">-</span></div>
     <div class="bitem"><span class="bk">Resolution</span><span class="bv" id="i_res">-</span></div>
     <div class="bitem"><span class="bk">Frame rate</span><span class="bv" id="i_fps">-</span></div>
-    <div class="bitem"><span class="bk">Torch</span><span class="bv" id="i_torch">-</span></div>
+    <div class="bitem"><span class="bk">Battery</span><span class="bv" id="i_batt">-</span></div>
     <div class="bitem"><span class="bk">Viewers</span><span class="bv" id="i_view">-</span></div>
   </div>
   <div class="content">
@@ -211,6 +211,7 @@ object WebUi {
         <input id="apk" type="file" accept=".apk,application/vnd.android.package-archive">
       </div>
       <button id="doUpdate">Update software</button>
+      <button id="doRestart" class="secondary">Restart service</button>
       <p class="hint" id="updmsg">Installs without a cable. The page reloads by itself when the phone comes back.</p>
       <p class="hint"><a href="/api/log?lines=2000" target="_blank" rel="noopener">Download log</a></p>
     </div>
@@ -580,7 +581,8 @@ function refresh() {
     el('i_cam').textContent = s.facing || '-';
     el('i_res').textContent = (s.width || '?') + 'x' + (s.height || '?');
     el('i_fps').textContent = (s.fpsActive || 0) + ' / ' + (s.fps || '?') + ' fps';
-    el('i_torch').textContent = s.torch ? (s.torchAvailable ? 'on' : 'n/a') : 'off';
+    el('i_batt').textContent = s.battery == null ? '-'
+      : s.battery + '%' + (s.charging ? ' charging' : '');
     el('i_view').textContent = (s.clients || 0);
     applyVideo(s);
     // A poll that was due long ago means the machine was suspended, and the
@@ -636,6 +638,23 @@ function refresh() {
     el('i_state').textContent = 'unreachable';
   });
 }
+// The same restart the phone's own screen offers: a fresh pass through the
+// service's startup, which fixes states like a camera the framework has
+// stopped trusting. The answer comes before the restart runs.
+el('doRestart').onclick = function() {
+  var b = this;
+  b.disabled = true;
+  b.textContent = 'Restarting...';
+  post('/api/service/restart', {}).then(function() {
+    setTimeout(function() {
+      b.disabled = false;
+      b.textContent = 'Restart service';
+    }, 4000);
+  }).catch(function() {
+    b.disabled = false;
+    b.textContent = 'Restart service';
+  });
+};
 el('s_facing').onchange = function() { setSetting('facing', this.value); };
 el('s_res').onchange = function() {
   // Zones are drawn for the aspect ratio they were made in: a resolution

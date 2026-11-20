@@ -48,7 +48,14 @@ class Motion {
         private const val COOLDOWN_MS = 5000L       // quiet time between triggers
         private const val TARGET_W = 320            // analysis frame width
         private const val BG_RATE = 32              // background absorbs 1/32 per tick (~20 s)
-        private const val MAX_BLOB = 15             // blob size the top of the slider asks for
+
+        /**
+         * Blob size in cells that the top of the sensitivity slider asks
+         * for - about a tenth of the frame, i.e. a person at room distance.
+         * The slider maps 0-100 onto 1..[MAX_BLOB] cells, so its whole range
+         * spans the objects that actually move in front of this camera.
+         */
+        private const val MAX_BLOB = 60
     }
 
     /** A parsed zone with its live state. */

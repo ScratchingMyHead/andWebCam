@@ -44,6 +44,9 @@ class HttpServer(
         /** Returns null on success, or an error message. */
         fun reboot(): String?
 
+        /** Reruns the service's own startup, as the phone's button does. */
+        fun restartService()
+
         /**
          * Validates an uploaded APK and copies it into an install session.
          * Returns null when it is staged and ready to commit, or a sentence
@@ -375,6 +378,13 @@ class HttpServer(
                         sessions.clear()
                         respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                     }
+                }
+            }
+
+            method == "POST" && path == "/api/service/restart" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    host.restartService()
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                 }
             }
 

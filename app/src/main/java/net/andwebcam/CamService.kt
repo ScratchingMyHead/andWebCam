@@ -319,6 +319,31 @@ class CamService : Service(), HttpServer.Host {
         return if (((orientation % 180) + 180) % 180 == 90) h / w else w / h
     }
 
+    /**
+     * The battery percentage and whether it is charging, read from the
+     * sticky battery broadcast: no listener, just the last state the system
+     * announced. Null when the phone will not say.
+     */
+    private fun batteryInfo(): Pair<Int?, Boolean> {
+        return try {
+            val i = registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
+                ?: return null to false
+            val level = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
+            val scale = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
+            val pct = if (level >= 0 && scale > 0) level * 100 / scale else null
+            val charging = i.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0 ||
+                i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ==
+                android.os.BatteryManager.BATTERY_STATUS_FULL
+            Pair(pct, charging)
+        } catch (e: Exception) {
+            Pair(null, false)
+        }
+    }
+
+    private fun batteryLevel(): Int? = batteryInfo().first
+
+    private fun batteryCharging(): Boolean = batteryInfo().second
+
     private fun ago(ms: Long): String =
         java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(ms))
 
@@ -563,6 +588,8 @@ class CamService : Service(), HttpServer.Host {
             "fpsActive" to State.framesPerSec,
             "quality" to Prefs.quality,
             "torch" to Prefs.torch,
+            "battery" to batteryLevel(),
+            "charging" to batteryCharging(),
             "zoom" to Prefs.zoom,
             "orientation" to Prefs.orientation,
             "clients" to State.clients,
@@ -795,6 +822,13 @@ class CamService : Service(), HttpServer.Host {
     override fun deleteAllRecordings(): String? = recorder.deleteAll()
 
     override fun videoFile(name: String): Recorder.File? = recorder.videoFile(name)
+
+    /**
+     * The phone's "Restart service" button, from the web: a fresh pass
+     * through the startup, which re-registers the foreground service and
+     * clears states like a camera the framework has stopped trusting.
+     */
+    override fun restartService() = CamService.start(this)
 
     override fun reboot(): String? {
         val dpm = getSystemService(DevicePolicyManager::class.java)
