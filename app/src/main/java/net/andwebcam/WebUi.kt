@@ -88,6 +88,7 @@ object WebUi {
  .zhdr { margin:6px 0 2px; font-size:11px; color:#889 }
  .zhdr span:nth-child(2) { text-align:left }
  .zrow .zslider { width:100%; margin-left:0 }
+ .sensscale { display:flex; justify-content:space-between; font-size:11px; color:#889; margin:-4px 0 8px }
  .zrow button { padding:5px 9px; font-size:12px }
  .zrow button svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
  .vrow input[type=range] { padding:0 }
@@ -261,9 +262,10 @@ object WebUi {
       </div>
       <h2>Sensitivity</h2>
       <div class="row">
-        <label>How much a cell must change to count as movement: <span id="v_level">85</span></label>
+        <label>Current level: <span id="v_level">85</span></label>
         <input id="s_level" type="range" min="0" max="100" step="1">
       </div>
+      <div class="sensscale"><span>Less sensitive</span><span>More sensitive</span></div>
       <h2>Activation zones</h2>
       <div class="actions">
         <button id="zoneAdd" class="secondary">Add</button>
