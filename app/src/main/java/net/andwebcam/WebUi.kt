@@ -88,6 +88,8 @@ object WebUi {
  .zhdr { margin:6px 0 2px; font-size:11px; color:#889 }
  .zhdr span:nth-child(2) { text-align:left }
  .zrow .zslider { width:100%; margin-left:0 }
+ .zrow button { padding:5px 9px; font-size:12px }
+ .zrow button svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
  .vrow input[type=range] { padding:0 }
  .vrow a { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:5px 9px; font-size:12px; text-decoration:none }
  .vrow a:hover { background:#3d3d3d }
@@ -1211,7 +1213,6 @@ function motionTick() {
     b.textContent = d.enabled ? 'Stop motion' : 'Start motion';
     if (document.activeElement !== el('s_quiet')) { el('s_quiet').value = d.quiet || 30; }
     el('v_quiet').textContent = d.quiet || 30;
-    el('s_quiet').disabled = !!d.enabled;
     if (document.activeElement !== el('s_level')) { el('s_level').value = d.level == null ? 85 : d.level; }
     el('v_level').textContent = d.level == null ? 85 : d.level;
     drawZones();
