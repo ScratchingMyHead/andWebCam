@@ -83,6 +83,10 @@ object WebUi {
  .zslider::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
  .zid { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:50%; border:2px solid #ff8a80; color:#fff; font-size:12px; font-weight:700; flex:0 0 auto }
  .vrow .zslider { margin-left:auto }
+ .zhdr { display:flex; align-items:center; gap:8px; margin:6px 0 2px; font-size:11px; color:#889 }
+ .zhdr span:first-child { width:24px; flex:0 0 auto; text-align:center }
+ .zhdr span:nth-child(2) { width:110px; margin-left:auto; text-align:center }
+ .zhdr span:last-child { width:34px; flex:0 0 auto }
  .vrow input[type=range] { padding:0 }
  .vrow a { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:5px 9px; font-size:12px; text-decoration:none }
  .vrow a:hover { background:#3d3d3d }
@@ -252,9 +256,9 @@ object WebUi {
         <label>Keep recording for <span id="v_quiet">30</span> seconds</label>
         <input id="s_quiet" type="number" min="5" max="300" step="1">
       </div>
-      <h2>Trigger level</h2>
+      <h2>Sensitivity</h2>
       <div class="row">
-        <label>Sensitivity: <span id="v_level">85</span> &mdash; how much a cell must change to count as movement</label>
+        <label>How much a cell must change to count as movement: <span id="v_level">85</span></label>
         <input id="s_level" type="range" min="0" max="100" step="1">
       </div>
       <h2>Activation zones</h2>
@@ -264,6 +268,7 @@ object WebUi {
         <button id="zoneSave" class="secondary hidden">Save</button>
         <button id="zoneCancel" class="secondary hidden">Cancel</button>
       </div>
+      <div class="zhdr"><span>ID</span><span>Trigger level</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
       <div id="zoneList"><p class="hint">No zones yet.</p></div>
     </div>
