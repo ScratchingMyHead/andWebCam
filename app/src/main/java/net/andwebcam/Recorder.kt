@@ -56,6 +56,10 @@ class Recorder(private val ctx: Context) {
     @Volatile var recording = false
         private set
 
+    /** Wall clock when the running session started, for elapsed displays. */
+    @Volatile var recStartMs = 0L
+        private set
+
     /** A short note about the latest start or stop, shown on the page. */
     @Volatile var lastNote: String? = null
 
@@ -235,6 +239,26 @@ class Recorder(private val ctx: Context) {
         }
     }
 
+    /**
+     * Delete every finished video. A recording that is running now is not
+     * touched: its file is still a temporary, and it will be named like the
+     * rest when it finishes.
+     */
+    fun deleteAll(): String? {
+        val t = Saf.tree ?: return "no folder has been chosen"
+        val d = Saf.findDoc(cr, t, t, VIDEOS_DIR) ?: return "no videos folder"
+        if (recording) return "a recording is running; stop it first"
+        var n = 0
+        for (c in Saf.listChildren(cr, t, d)) {
+            if (!c.name.startsWith("video-") || !c.name.endsWith(".mp4")) continue
+            if (Saf.deleteDoc(cr, c.doc)) n++ else Log.w(TAG, "could not delete ${c.name}")
+        }
+        durationCache.clear()
+        Log.i(TAG, "deleted all videos: $n files")
+        lastNote = "Deleted $n videos."
+        return null
+    }
+
     /** A finished video, for playback through the server. */
     class File(val name: String, val size: Long, private val opener: () -> InputStream?) {
         fun open(): InputStream? = try {
@@ -369,6 +393,7 @@ class Recorder(private val ctx: Context) {
 
         tempFile = tempName
         recording = true
+        recStartMs = System.currentTimeMillis()
         lastNote = "Recording."
         Log.i(TAG, "recording started: $tempName (${w}x$h) with ${enc.name}, ring carried ${ringFrames.size} frames")
         recordSession(enc, w, h)
@@ -404,6 +429,7 @@ class Recorder(private val ctx: Context) {
         val finished = finishSession(enc, w, h)
         val name = tempFile
         recording = false
+        recStartMs = 0
         tempFile = null
         // Frames that arrived while the file was being finalized belong to
         // the session that just ended, not to whatever comes next.

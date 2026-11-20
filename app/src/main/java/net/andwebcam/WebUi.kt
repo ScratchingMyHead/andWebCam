@@ -69,6 +69,7 @@ object WebUi {
  .badge.anon { background:#555 }
  .badge.locked { background:#7a2f2f }
  .err { color:#f66; font-size:12px; min-height:1.2em; margin:6px 0 0 }
+ .rec { color:#ff1744; font-weight:700 }
  .hint { color:#888; font-size:12px; margin:6px 0 0 }
  .vrow { display:flex; align-items:center; gap:8px; margin:7px 0 }
  .vname { flex:1; font-family:monospace; font-size:12px; color:#dde; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
@@ -234,6 +235,7 @@ object WebUi {
         <p class="hint">Nothing recorded yet.</p>
       </div>
       <p class="hint"><a href="#" id="dlHelp">Problems downloading?</a></p>
+      <p class="hint"><button id="deleteAllVids" class="secondary">Delete all videos</button></p>
     </div>
     <div class="panel hidden" id="motionPane">
       <h2>Motion activation</h2>
@@ -250,6 +252,7 @@ object WebUi {
       <h2>Activation zones</h2>
       <div class="actions">
         <button id="zoneAdd" class="secondary">Add</button>
+        <button id="zoneClear" class="secondary hidden">Clear</button>
         <button id="zoneSave" class="secondary hidden">Save</button>
         <button id="zoneCancel" class="secondary hidden">Cancel</button>
       </div>
@@ -534,6 +537,34 @@ function hideBusySoon(ms) {
   clearTimeout(busyTimer);
   busyTimer = setTimeout(hideBusy, ms);
 }
+// The Status banner item. While a recording runs - by hand or from motion -
+// a red record dot and the elapsed time join the state, and a once-a-second
+// ticker keeps the clock moving between status polls.
+function updateStatusText(s) {
+  var st = s.locked ? 'locked'
+    : (!s.streaming ? 'streaming off' : (s.cameraActive ? 'streaming' : 'idle (no viewers)'));
+  if (s.motion) { st += ', motion on'; }
+  if (s.recording && s.recStart) {
+    st += ' <span class="rec">&#9679; ' + recFmtElapsed(Date.now() - s.recStart) + '</span>';
+  }
+  el('i_state').innerHTML = st;
+}
+
+function recFmtElapsed(ms) {
+  var t = Math.max(0, Math.floor(ms / 1000));
+  var h = Math.floor(t / 3600);
+  var m = Math.floor((t % 3600) / 60);
+  var s = t % 60;
+  var mm = (m < 10 ? '0' : '') + m;
+  var ss = (s < 10 ? '0' : '') + s;
+  return h ? h + ':' + mm + ':' + ss : mm + ':' + ss;
+}
+
+setInterval(function() {
+  var s = window.S;
+  if (s && s.recording && s.recStart) { updateStatusText(s); }
+}, 1000);
+
 function refresh() {
   fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
     var now = Date.now();
@@ -543,10 +574,7 @@ function refresh() {
     el('who').textContent = s.admin ? 'admin' : (s.anonView ? 'view-only' : 'locked');
     el('who').className = 'badge ' + (s.admin ? '' : (s.anonView ? 'anon' : 'locked'));
     el('who').title = s.auth ? 'Signed in with ' + s.auth : '';
-    var st = s.locked ? 'locked'
-      : (!s.streaming ? 'streaming off' : (s.cameraActive ? 'streaming' : 'idle (no viewers)'));
-    if (s.motion) { st += ', motion on'; }
-    el('i_state').textContent = st;
+    updateStatusText(s);
     el('i_cam').textContent = s.facing || '-';
     el('i_res').textContent = (s.width || '?') + 'x' + (s.height || '?');
     el('i_fps').textContent = (s.fpsActive || 0) + ' / ' + (s.fps || '?') + ' fps';
@@ -906,6 +934,7 @@ el('l_pass').addEventListener('keydown', loginKey);
 // starts and stops it), because every poll lists the folder on the phone.
 var recPoll = null;
 var motionPoll = null;
+var recCount = 0;
 var recPlaying = null;
 var recNoteSeen = null;
 var recNoteArmed = false;
@@ -971,6 +1000,9 @@ function recRefresh() {
   if (!(window.S && window.S.admin)) { return; }
   if (el('recPane').classList.contains('hidden')) { return; }
   fetch('/api/record/list').then(function(r) { return r.json(); }).then(function(d) {
+    recCount = (d.videos || []).length;
+    el('deleteAllVids').disabled = !recCount;
+    el('deleteAllVids').classList.toggle('hidden', !recCount);
     var btn = el('recBtn');
     btn.classList.toggle('danger', !!d.recording);
     if (!btn.disabled) {
@@ -1170,6 +1202,7 @@ function buildZoneList(d) {
     if (document.activeElement !== s) { s.value = z.sensitivity; }
     paintLevel(s, z.level);
   });
+  el('zoneClear').classList.toggle('hidden', !zones.length || !!drawing);
 }
 
 function paintLevel(s, level) {
@@ -1209,6 +1242,7 @@ function saveZones(list) {
 function updateDrawUi() {
   var d = !!drawing;
   el('zoneAdd').classList.toggle('hidden', d);
+  el('zoneClear').classList.toggle('hidden', d);
   el('zoneSave').classList.toggle('hidden', !d);
   el('zoneCancel').classList.toggle('hidden', !d);
   el('zoneSave').disabled = !drawing || drawing.length < 3;
@@ -1224,6 +1258,22 @@ el('zoneAdd').onclick = function() {
   drawZones();
 };
 el('zoneCancel').onclick = function() { drawing = null; updateDrawUi(); drawZones(); };
+el('zoneClear').onclick = function() {
+  var n = ((motionData || {}).zones || []).length;
+  if (!n) { return; }
+  if (!confirm('Delete all ' + n + ' zone' + (n === 1 ? '' : 's') + '?')) { return; }
+  saveZones([]);
+};
+el('deleteAllVids').onclick = function() {
+  var label = recCount ? recCount + ' saved video' + (recCount === 1 ? '' : 's') : 'all saved videos';
+  if (!confirm('Delete ' + label + '? This cannot be undone.')) { return; }
+  this.disabled = true;
+  post('/api/record/delete-all', {}).then(function(r) {
+    el('deleteAllVids').disabled = false;
+    if (r.ok === false) { recMsg(r.error || 'Could not delete the videos'); }
+    recRefresh();
+  }).catch(function() { el('deleteAllVids').disabled = false; });
+};
 el('zoneSave').onclick = function() {
   if (!drawing || drawing.length < 3) { return; }
   var d = motionData || { zones: [] };

@@ -93,6 +93,9 @@ class HttpServer(
         /** Deletes one finished video; null when done. */
         fun deleteRecording(name: String): String?
 
+        /** Deletes every finished video; null when done. */
+        fun deleteAllRecordings(): String?
+
         /** A finished video for playback, or null when there is none. */
         fun videoFile(name: String): Recorder.File?
     }
@@ -442,6 +445,16 @@ class HttpServer(
                 if (role != Role.ADMIN) unauthorized(output) else {
                     val vals = parseFlatJson(String(body))
                     val err = host.deleteRecording(vals["name"] ?: "")
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(mapOf("ok" to (err == null), "error" to err)),
+                    )
+                }
+            }
+
+            method == "POST" && path == "/api/record/delete-all" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val err = host.deleteAllRecordings()
                     respond(
                         output, 200, "application/json",
                         jsonBytes(mapOf("ok" to (err == null), "error" to err)),

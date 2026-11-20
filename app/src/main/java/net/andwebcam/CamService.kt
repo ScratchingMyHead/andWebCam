@@ -574,6 +574,7 @@ class CamService : Service(), HttpServer.Host {
             // status carries the state so the banner can announce a session
             // even with the pane closed.
             "recording" to recorder.recording,
+            "recStart" to if (recorder.recording) recorder.recStartMs else null,
             "recNote" to recorder.lastNote,
             // Motion state for the banner and the pane: how many zones are
             // set and what aspect they were drawn for, so a resolution change
@@ -790,6 +791,8 @@ class CamService : Service(), HttpServer.Host {
     override fun recordingInfo(): Map<String, Any?> = recorder.list()
 
     override fun deleteRecording(name: String): String? = recorder.delete(name)
+
+    override fun deleteAllRecordings(): String? = recorder.deleteAll()
 
     override fun videoFile(name: String): Recorder.File? = recorder.videoFile(name)
 
