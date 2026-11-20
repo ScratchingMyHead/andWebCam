@@ -967,6 +967,7 @@ el('l_pass').addEventListener('keydown', loginKey);
 var recPoll = null;
 var motionPoll = null;
 var recCount = 0;
+var recListKey = '';
 var recPlaying = null;
 var recNoteSeen = null;
 var recNoteArmed = false;
@@ -1018,9 +1019,23 @@ function recStopPlayer() {
   v.removeAttribute('src');
   v.classList.add('hidden');
   recPlaying = null;
+  updatePlayButtons();
 }
+// The play icons change with what is playing, but that must not rebuild the
+// rows: rebuilding moves the player and kicks it out of fullscreen.
+function updatePlayButtons() {
+  var b = el('recList').querySelectorAll('button[data-play]');
+  for (var i = 0; i < b.length; i++) {
+    var on = b[i].getAttribute('data-play') === recPlaying;
+    b[i].innerHTML = on ? ICON_STOP : ICON_PLAY;
+    b[i].title = on ? 'Stop' : 'Play';
+    b[i].setAttribute('aria-label', b[i].title + ' ' + b[i].getAttribute('data-play'));
+  }
+}
+
 function recPlay(name) {
   recPlaying = name;
+  updatePlayButtons();
   var v = el('recPlay');
   v.classList.remove('hidden');
   // The name is in the path so a browser's own download uses it; the query
@@ -1062,14 +1077,20 @@ function recRefresh() {
       : 'Free ' + recMB(d.free) + ' MB · cap ' + recMB(d.cap) + ' MB · used ' +
         recMB1(d.used) + ' MB (' +
         (d.cap ? ((d.used || 0) / d.cap * 100).toFixed(1) : '0.0') + '%)';
+    var vids = d.videos || [];
+    var key = vids.map(function(v) { return v.name + ':' + v.size; }).join('|');
+    // Rebuilding the list means removing and re-inserting the player, and
+    // removing the fullscreen element ends fullscreen. Leave the list alone
+    // while it is fullscreen, and only rebuild when it really changed.
+    if (document.fullscreenElement || document.webkitFullscreenElement || key === recListKey) {
+      updatePlayButtons();
+      return;
+    }
+    recListKey = key;
     var list = el('recList');
     var player = el('recPlay');
-    // Detach the player before clearing the list, or the clear would
-    // destroy it. The re-insert happens in the same task, so a video that
-    // is playing does not even stutter.
     if (player.parentNode) { player.parentNode.removeChild(player); }
     list.innerHTML = '';
-    var vids = d.videos || [];
     if (!vids.length) {
       var p = document.createElement('p');
       p.className = 'hint';
@@ -1093,6 +1114,7 @@ function recRefresh() {
       meta.textContent = [recFmtDur(v.seconds), recFmtSize(v.size)].filter(Boolean).join(' · ');
       var play = document.createElement('button');
       play.className = 'secondary';
+      play.dataset.play = v.name;
       play.innerHTML = recPlaying === v.name ? ICON_STOP : ICON_PLAY;
       play.title = recPlaying === v.name ? 'Stop' : 'Play';
       play.setAttribute('aria-label', play.title + ' ' + v.name);
