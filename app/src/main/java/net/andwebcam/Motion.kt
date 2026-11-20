@@ -339,8 +339,8 @@ class Motion {
                 }
                 // Slider scale: level is the sensitivity that would fire on
                 // this blob, so the fill reaching the handle means firing.
-                zone.level = (((biggest - 1) * 100) / MAX_BLOB).coerceIn(0, 100)
-                val need = 1 + (zone.sensitivity * MAX_BLOB) / 100
+                zone.level = ((biggest * 100) / MAX_BLOB).coerceIn(0, 100)
+                val need = 1 + (zone.sensitivity * (MAX_BLOB - 1)) / 100
                 if (biggest >= need) {
                     nowActive = true
                     val now = System.currentTimeMillis()
