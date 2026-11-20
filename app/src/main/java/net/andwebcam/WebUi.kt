@@ -83,7 +83,11 @@ object WebUi {
  .zslider::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
  .zid { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:50%; border:2px solid #ff8a80; color:#fff; font-size:12px; font-weight:700; flex:0 0 auto }
  .vrow .zslider { margin-left:auto }
- .zhdr { margin:6px 0 2px; font-size:11px; color:#889; text-align:left }
+ .zrow, .zhdr { display:grid; grid-template-columns:24px 1fr 31px; gap:8px; align-items:center }
+ .zrow { margin:7px 0 }
+ .zhdr { margin:6px 0 2px; font-size:11px; color:#889 }
+ .zhdr span:nth-child(2) { text-align:left }
+ .zrow .zslider { width:100%; margin-left:0 }
  .vrow input[type=range] { padding:0 }
  .vrow a { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:5px 9px; font-size:12px; text-decoration:none }
  .vrow a:hover { background:#3d3d3d }
@@ -265,7 +269,7 @@ object WebUi {
         <button id="zoneSave" class="secondary hidden">Save</button>
         <button id="zoneCancel" class="secondary hidden">Cancel</button>
       </div>
-      <p class="zhdr">ID, Trigger level</p>
+      <div class="zhdr"><span>ID</span><span>Trigger level</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
       <div id="zoneList"><p class="hint">No zones yet.</p></div>
     </div>
@@ -1192,7 +1196,7 @@ function buildZoneList(d) {
     }
     zones.forEach(function(z) {
       var row = document.createElement('div');
-      row.className = 'vrow';
+      row.className = 'zrow';
       // The number in a ring, so it reads as the same thing the overlay puts
       // on the video.
       var name = document.createElement('span');
