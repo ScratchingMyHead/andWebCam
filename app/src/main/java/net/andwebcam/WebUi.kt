@@ -54,6 +54,8 @@ object WebUi {
  button:disabled { opacity:.45; cursor:default }
  .actions { display:flex; gap:8px; flex-wrap:wrap }
  .restartActions { margin-top:10px }
+ .filebtn { display:inline-flex; align-items:center; justify-content:center; background:#333; color:#fff; border-radius:6px; padding:9px 12px; cursor:pointer; font-size:13px }
+ .filebtn:hover { background:#3d3d3d; color:#fff }
  .dbgact { margin-top:14px }
  .paneClose { margin-left:auto; padding:5px 10px; font-size:15px; line-height:1.1; background:#2b2b2b; color:#9ab }
  .paneClose:hover { background:#3a3a3a; color:#fff }
@@ -158,14 +160,12 @@ object WebUi {
     </div>
     </div>
     <div class="panel hidden" id="admin">
-      <h2>Streaming</h2>
       <div class="actions">
         <button id="toggle">Stop streaming</button>
         <button id="paneClose" class="paneClose" title="Hide the settings pane" aria-label="Hide the settings pane">&raquo;</button>
       </div>
       <p class="err" id="actionMsg"></p>
 
-      <h2>Camera</h2>
       <div class="row">
         <label>Camera</label>
         <select id="s_facing"><option value="back">Back</option><option value="front">Front</option></select>
@@ -226,7 +226,6 @@ object WebUi {
         <input id="s_port" type="number" min="1" max="65535">
       </div>
       <button id="apply">Apply service settings</button>
-      <p class="hint">Changing the name or port restarts the server; reconnect at the new address.</p>
 
       <h2>Admin password</h2>
       <div class="row">
@@ -234,12 +233,12 @@ object WebUi {
         <input id="p_new" type="password">
       </div>
       <button id="pwset">Change password</button>
-      <p class="hint" id="pwmsg">Once changed, the phone screen stops displaying the password.</p>
+      <p class="hint" id="pwmsg"></p>
 
-      <h2>Software</h2>
-      <div class="row">
-        <label for="apk">Update from an APK file</label>
-        <input id="apk" type="file" accept=".apk,application/vnd.android.package-archive">
+      <h2>Software Update</h2>
+      <div class="actions">
+        <label class="filebtn" for="apk">Choose APK file</label>
+        <input id="apk" type="file" accept=".apk,application/vnd.android.package-archive" style="display:none">
       </div>
       <button id="doUpdate">Update software</button>
       <p class="hint" id="updmsg">Installs without a cable. The page reloads by itself when the phone comes back.</p>
@@ -663,9 +662,8 @@ function refresh() {
     // Restarting needs device owner; without it there is nothing the button
     // could do, so it is not offered.
     el('reboot').classList.toggle('hidden', !s.canReboot);
-    // What came of the last update; the note is kept across the restart a
-    // successful one causes, so the answer is still there afterwards.
-    if (!updateBusy && s.updateNote) { updateMsg(s.updateNote); }
+    // The footer already carries the version, so the post-update note is
+    // only useful while an update is actually being driven from this page.
     if (el('s_res').options.length !== (s.resolutions || []).length) {
       el('s_res').innerHTML = '';
       (s.resolutions || []).forEach(function(x) { var o = document.createElement('option'); o.value = x; o.textContent = x; el('s_res').appendChild(o); });
