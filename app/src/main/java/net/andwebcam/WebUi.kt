@@ -234,7 +234,7 @@ object WebUi {
 
       <h2>Service</h2>
       <div class="row">
-        <label>Name (host becomes NAME.local)</label>
+        <label>Name (hostname: <span id="v_host">NAME</span>.local)</label>
         <input id="s_name" type="text">
       </div>
       <div class="row">
@@ -695,6 +695,7 @@ function refresh() {
     if (document.activeElement !== el('s_zoom')) { el('s_zoom').max = String(s.maxZoom || 4); el('s_zoom').value = s.zoom || 1; el('v_zoom').textContent = Math.round((s.zoom || 1) * 10) / 10; }
     if (document.activeElement !== el('s_orient')) { el('s_orient').value = String(s.orientation || 0); }
     if (document.activeElement !== el('s_name')) { el('s_name').value = s.serviceName || 'andwebcam'; }
+    el('v_host').textContent = el('s_name').value || 'NAME';
     if (document.activeElement !== el('s_port')) { el('s_port').value = s.port || 8443; }
     if (document.activeElement !== el('s_torch')) { el('s_torch').checked = !!s.torch && !!s.torchAvailable; }
     el('s_torch').disabled = !s.torchAvailable;
@@ -742,6 +743,7 @@ el('s_res').onchange = function() {
 el('s_fps').onchange = function() { setSetting('fps', this.value); };
 el('s_scale').onchange = function() { setSetting('streamScale', this.value); };
 el('s_q').oninput = function() { el('v_q').textContent = this.value; };
+el('s_name').oninput = function() { el('v_host').textContent = this.value || 'NAME'; };
 el('s_q').onchange = function() { setSetting('quality', this.value); };
 el('s_zoom').oninput = function() { el('v_zoom').textContent = Math.round(parseFloat(this.value) * 10) / 10; };
 el('s_zoom').onchange = function() { setSetting('zoom', this.value); };
