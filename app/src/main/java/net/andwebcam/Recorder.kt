@@ -133,6 +133,9 @@ class Recorder(private val ctx: Context) {
     private var yBuf = ByteArray(0)
     private var uvBuf = ByteArray(0)
 
+    /** One mutable bitmap, refilled each frame instead of allocating a new one. */
+    private var reusableBitmap: Bitmap? = null
+
     /** Durations already read, keyed by "name:size" so a rewritten file re-reads. */
     private val durationCache = ConcurrentHashMap<String, Long>()
 
@@ -696,15 +699,44 @@ class Recorder(private val ctx: Context) {
      * of an odd-sized frame averages what it has.
      */
     private fun jpegToNv12(jpeg: ByteArray, w: Int, h: Int): Boolean {
-        var bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return false
+        // Refill the same bitmap every frame. A 4K bitmap is ~33 MB, so
+        // allocating one per frame would create huge GC pressure. If the
+        // camera size changed, the old bitmap cannot be reused; scale in a
+        // temporary one and let the next frame allocate at the new size.
+        var bmp: Bitmap? = null
+        var temporary = false
+        val prior = reusableBitmap
+        if (prior != null) {
+            val opts = BitmapFactory.Options().apply {
+                inMutable = true
+                inBitmap = prior
+                inPreferredConfig = Bitmap.Config.ARGB_8888
+            }
+            try {
+                bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts)
+            } catch (e: IllegalArgumentException) {
+                bmp = null
+            }
+            if (bmp == null) {
+                prior.recycle()
+                reusableBitmap = null
+            }
+        }
+        if (bmp == null) {
+            bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size) ?: return false
+        }
+        if (bmp !== prior && prior != null && !prior.isRecycled) prior.recycle()
         if (bmp.width != w || bmp.height != h) {
             val scaled = Bitmap.createScaledBitmap(bmp, w, h, true)
             bmp.recycle()
             bmp = scaled
+            temporary = true
         }
+        if (temporary) reusableBitmap = null else reusableBitmap = bmp
         try {
             bmp.getPixels(pixels, 0, w, 0, 0, w, h)
         } catch (e: Exception) {
+            if (!temporary) reusableBitmap = null
             bmp.recycle()
             return false
         }
@@ -755,7 +787,7 @@ class Recorder(private val ctx: Context) {
             }
             py += 2
         }
-        bmp.recycle()
+        if (temporary) bmp.recycle()
         return true
     }
 
