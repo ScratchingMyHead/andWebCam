@@ -119,8 +119,7 @@ object WebUi {
  .recplayer a:hover { background:#3d3d3d }
  .recplayer video { flex:1; min-height:0; width:100%; display:block; background:#000; object-fit:contain }
  #recList { max-height:320px; overflow-y:auto; border:1px solid #222; border-radius:6px; padding-right:2px }
- .vrow.playing { background:#274a6b; box-shadow:inset 3px 0 0 #6cb6ff; border-radius:6px }
- .vrow.playing .vname { color:#fff }
+ .vrow.playing { background:#2b2b2b; border-radius:6px }
  #recPlay { width:100%; margin:9px 0 0; background:#000 }
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
