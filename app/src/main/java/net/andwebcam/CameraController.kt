@@ -15,6 +15,7 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.ImageReader
+import android.media.MediaCodec
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -407,6 +408,19 @@ class CameraController(
 
     fun captureInfo(): Map<String, Any?> {
         val c = chars
+        val map = c?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        fun sizes(list: Array<Size>?, kind: Int): String? = list
+            ?.joinToString { s ->
+                val ns = map?.getOutputMinFrameDuration(kind, s) ?: 0L
+                val fpsCap = if (ns > 0) (1_000_000_000L / ns).toInt() else 0
+                "${s.width}x${s.height}@$fpsCap"
+            }
+        fun encoderSizes(): String? = map?.getOutputSizes(MediaCodec::class.java)
+            ?.joinToString { s ->
+                val ns = map.getOutputMinFrameDuration(MediaCodec::class.java, s)
+                val fpsCap = if (ns > 0) (1_000_000_000L / ns).toInt() else 0
+                "${s.width}x${s.height}@$fpsCap"
+            }
         return mapOf(
             "zoomRange" to c?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.toString(),
             "digitalMax" to c?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM),
@@ -417,6 +431,9 @@ class CameraController(
             "resultZoom" to resultZoom,
             "resultCrop" to resultCrop?.toString(),
             "focus" to lastFocus,
+            "jpegSizes" to sizes(map?.getOutputSizes(ImageFormat.JPEG), ImageFormat.JPEG),
+            "yuvSizes" to sizes(map?.getOutputSizes(ImageFormat.YUV_420_888), ImageFormat.YUV_420_888),
+            "encoderSizes" to encoderSizes(),
         )
     }
 
