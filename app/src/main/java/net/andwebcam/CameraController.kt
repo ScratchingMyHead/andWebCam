@@ -16,6 +16,7 @@ import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.ImageReader
 import android.media.MediaCodec
+import android.media.Image
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -393,6 +394,11 @@ class CameraController(
     private var diagExposureMs = 0f
     private var diagRange = ""
 
+    // yuvshift diagnostic: does the raw video plane step sideways too?
+    private var yuvPrev: ByteArray? = null
+    private var yuvShiftCount = 0
+    private val yuvShiftSamples = StringBuilder()
+
     // Focus is left locked between recordings, so a windy scene cannot make
     // the lens hunt and move the whole picture. A recording switches it to
     // continuous AF so somebody walking right up stays sharp.
@@ -455,6 +461,9 @@ class CameraController(
         diag = Diag(mode, seconds, resolution)
         diagImages = 0
         diagResults = 0
+        yuvPrev = null
+        yuvShiftCount = 0
+        yuvShiftSamples.setLength(0)
         stopInternal()
         wantOpen = true          // openDevice() closes it again if this is false
         startInternal()
@@ -469,12 +478,15 @@ class CameraController(
                     diagResults / span, diagImages / span, diagImages,
                     diagFrameMs, diagExposureMs, diagRange,
                 )
-                Log.i(TAG, line)
+                val report = if (d.mode == "yuvshift") {
+                    "$line; shifted frames=$yuvShiftCount of $diagImages samples=$yuvShiftSamples"
+                } else line
+                Log.i(TAG, report)
                 diag = null
                 stopInternal()
                 wantOpen = resume
                 if (resume) requestStart()
-                onDiagDone?.invoke(line)
+                onDiagDone?.invoke(report)
             }
         }, seconds * 1000L + 500)
     }
@@ -613,6 +625,10 @@ class CameraController(
         val img = try { rd.acquireNextImage() } catch (e: Exception) { null } ?: return
         try {
             if (diag != null) {            // count only: no copy, trim or send
+                if (diag?.mode == "yuvshift") {
+                    try { analyseYuvShift(img) }
+                    catch (e: Exception) { Log.w(TAG, "yuv shift check failed: ${e.message}") }
+                }
                 diagImages++
                 return
             }
@@ -662,6 +678,50 @@ class CameraController(
         } finally {
             img.close()
         }
+    }
+
+    /** Compare a static strip of consecutive raw Y planes for a horizontal step. */
+    private fun analyseYuvShift(img: Image) {
+        val p = img.planes[0]
+        val w = size.width
+        val h = size.height
+        val x0 = w / 6
+        val y0 = h * 140 / 720
+        val cw = minOf(w - x0 - 4, w * 900 / 1280)
+        val ch = minOf(h - y0 - 4, h * 90 / 720)
+        if (cw < 32 || ch < 16) return
+        val crop = ByteArray(cw * ch)
+        val buf = p.buffer
+        for (y in 0 until ch) {
+            val base = (y0 + y) * p.rowStride + x0 * p.pixelStride
+            for (x in 0 until cw) crop[y * cw + x] = buf.get(base + x * p.pixelStride)
+        }
+        val prev = yuvPrev
+        if (prev != null && prev.size == crop.size) {
+            fun score(dx: Int): Double {
+                var sum = 0L
+                var n = 0
+                for (y in 4 until ch - 4) {
+                    for (x in 4 until cw - 4) {
+                        sum += abs(prev[y * cw + x].toInt() - crop[y * cw + x + dx].toInt())
+                        n++
+                    }
+                }
+                return sum.toDouble() / n
+            }
+            val flat = score(0)
+            var best = flat
+            var bestDx = 0
+            for (dx in -2..2) {
+                val s = score(dx)
+                if (s < best) { best = s; bestDx = dx }
+            }
+            if (bestDx != 0 && flat - best > 1.5) {
+                yuvShiftCount++
+                if (yuvShiftSamples.length < 60) yuvShiftSamples.append("$bestDx ")
+            }
+        }
+        yuvPrev = crop
     }
 
     private fun trimSegmentPadding(src: ByteArray, len: Int): Int {
