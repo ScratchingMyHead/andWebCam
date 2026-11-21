@@ -241,7 +241,7 @@ object WebUi {
         <input id="apk" type="file" accept=".apk,application/vnd.android.package-archive" style="display:none">
       </div>
       <button id="doUpdate">Update software</button>
-      <p class="hint" id="updmsg">Installs without a cable. The page reloads by itself when the phone comes back.</p>
+      <p class="hint" id="updmsg"></p>
       <p class="hint"><a href="/api/log?lines=2000" target="_blank" rel="noopener">Download log</a></p>
       <div class="actions restartActions">
         <button id="reboot" class="danger">Restart phone</button>
