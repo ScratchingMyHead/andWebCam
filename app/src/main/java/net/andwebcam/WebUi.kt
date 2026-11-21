@@ -53,6 +53,7 @@ object WebUi {
  button.danger { background:#8a3030 }
  button:disabled { opacity:.45; cursor:default }
  .actions { display:flex; gap:8px; flex-wrap:wrap }
+ .restartActions { margin-top:10px }
  .dbgact { margin-top:14px }
  .paneClose { margin-left:auto; padding:5px 10px; font-size:15px; line-height:1.1; background:#2b2b2b; color:#9ab }
  .paneClose:hover { background:#3a3a3a; color:#fff }
@@ -160,7 +161,6 @@ object WebUi {
       <h2>Streaming</h2>
       <div class="actions">
         <button id="toggle">Stop streaming</button>
-        <button id="reboot" class="danger">Restart phone</button>
         <button id="paneClose" class="paneClose" title="Hide the settings pane" aria-label="Hide the settings pane">&raquo;</button>
       </div>
       <p class="err" id="actionMsg"></p>
@@ -242,9 +242,12 @@ object WebUi {
         <input id="apk" type="file" accept=".apk,application/vnd.android.package-archive">
       </div>
       <button id="doUpdate">Update software</button>
-      <button id="doRestart" class="secondary">Restart service</button>
       <p class="hint" id="updmsg">Installs without a cable. The page reloads by itself when the phone comes back.</p>
       <p class="hint"><a href="/api/log?lines=2000" target="_blank" rel="noopener">Download log</a></p>
+      <div class="actions restartActions">
+        <button id="reboot" class="danger">Restart phone</button>
+        <button id="doRestart" class="secondary">Restart service</button>
+      </div>
     </div>
     <div class="panel hidden" id="recPane">
       <h2>Record</h2>
