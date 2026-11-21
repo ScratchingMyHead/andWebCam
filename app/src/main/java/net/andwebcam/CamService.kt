@@ -125,9 +125,7 @@ class CamService : Service(), HttpServer.Host {
         Prefs.init(this)
         hub = StreamHub()
         recorder.ringRef = ring
-        recorder.onStarted = { camera.setAutoFocus(true) }
         recorder.onStopped = {
-            camera.setAutoFocus(false)
             motionOwned = false
             // The camera may now be the last reason to stay open.
             mainHandler.post {
@@ -624,8 +622,6 @@ class CamService : Service(), HttpServer.Host {
             "canReboot" to (getSystemService(DevicePolicyManager::class.java)
                 ?.isDeviceOwnerApp(packageName) == true),
             "updateNote" to Prefs.updateNote,
-            "captureInfo" to camera.captureInfo(),
-            "cameras" to camera.cameraListInfo(),
         )
     }
 

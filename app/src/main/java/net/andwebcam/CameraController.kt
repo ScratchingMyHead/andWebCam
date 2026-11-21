@@ -15,8 +15,6 @@ import android.hardware.camera2.CaptureResult
 import android.hardware.camera2.TotalCaptureResult
 import android.hardware.camera2.params.StreamConfigurationMap
 import android.media.ImageReader
-import android.media.MediaCodec
-import android.media.Image
 import android.os.Handler
 import android.os.HandlerThread
 import android.util.Log
@@ -331,13 +329,6 @@ class CameraController(
             request: CaptureRequest,
             result: TotalCaptureResult,
         ) {
-            // Remember where continuous AF settled so locking can hold that
-            // distance instead of snapping to infinity.
-            result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { lastFocus = it }
-            result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)?.let { resultOis = it }
-            result.get(CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE)?.let { resultEis = it }
-            result.get(CaptureResult.CONTROL_ZOOM_RATIO)?.let { resultZoom = it }
-            result.get(CaptureResult.SCALER_CROP_REGION)?.let { resultCrop = it }
             rateResults++
             if (diag != null) {
                 diagResults++
@@ -394,82 +385,6 @@ class CameraController(
     private var diagExposureMs = 0f
     private var diagRange = ""
 
-    // yuvshift diagnostic: does the raw video plane step sideways too?
-    private var yuvPrev: ByteArray? = null
-    private var yuvShiftCount = 0
-    private val yuvShiftSamples = StringBuilder()
-
-    // Focus is left locked between recordings, so a windy scene cannot make
-    // the lens hunt and move the whole picture. A recording switches it to
-    // continuous AF so somebody walking right up stays sharp.
-    @Volatile private var focusAuto = false
-    @Volatile private var lastFocus: Float? = null
-    private var zoomCapsLogged = false
-
-    /** What the camera actually reports on the last frame, for tuning. */
-    @Volatile private var resultOis = -1
-    @Volatile private var resultEis = -1
-    @Volatile private var resultZoom = -1f
-    @Volatile private var resultCrop: Rect? = null
-
-    fun cameraListInfo(): List<Map<String, Any?>> = mgr.cameraIdList.map { id ->
-        val c = mgr.getCameraCharacteristics(id)
-        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        mapOf(
-            "id" to id,
-            "facing" to when (c.get(CameraCharacteristics.LENS_FACING)) {
-                CameraCharacteristics.LENS_FACING_FRONT -> "front"
-                else -> "back"
-            },
-            "focal" to c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.contentToString(),
-            "maxZoom" to c.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM),
-            "has720p" to (map?.getOutputSizes(ImageFormat.JPEG)
-                ?.any { it.width == 1280 && it.height == 720 } ?: false),
-            "sizes" to map?.getOutputSizes(ImageFormat.JPEG)
-                ?.joinToString { "${it.width}x${it.height}" },
-        )
-    }
-
-    fun captureInfo(): Map<String, Any?> {
-        val c = chars
-        val map = c?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
-        fun sizes(list: Array<Size>?, kind: Int): String? = list
-            ?.joinToString { s ->
-                val ns = map?.getOutputMinFrameDuration(kind, s) ?: 0L
-                val fpsCap = if (ns > 0) (1_000_000_000L / ns).toInt() else 0
-                "${s.width}x${s.height}@$fpsCap"
-            }
-        fun encoderSizes(): String? = map?.getOutputSizes(MediaCodec::class.java)
-            ?.joinToString { s ->
-                val ns = map.getOutputMinFrameDuration(MediaCodec::class.java, s)
-                val fpsCap = if (ns > 0) (1_000_000_000L / ns).toInt() else 0
-                "${s.width}x${s.height}@$fpsCap"
-            }
-        return mapOf(
-            "zoomRange" to c?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.toString(),
-            "digitalMax" to c?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM),
-            "oisModes" to c?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contentToString(),
-            "afModes" to c?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.contentToString(),
-            "resultOis" to resultOis,
-            "resultEis" to resultEis,
-            "resultZoom" to resultZoom,
-            "resultCrop" to resultCrop?.toString(),
-            "focus" to lastFocus,
-            "jpegSizes" to sizes(map?.getOutputSizes(ImageFormat.JPEG), ImageFormat.JPEG),
-            "yuvSizes" to sizes(map?.getOutputSizes(ImageFormat.YUV_420_888), ImageFormat.YUV_420_888),
-            "encoderSizes" to encoderSizes(),
-        )
-    }
-
-    fun setAutoFocus(on: Boolean) {
-        if (focusAuto == on) return
-        focusAuto = on
-        handler.post {
-            Log.i(TAG, "autofocus ${if (on) "on for recording" else "locked after recording"}")
-            applyLiveInternal()
-        }
-    }
-
     /** Called on the camera thread when a run finishes, with a one-line report. */
     @Volatile var onDiagDone: ((String) -> Unit)? = null
 
@@ -479,9 +394,6 @@ class CameraController(
         diag = Diag(mode, seconds, resolution)
         diagImages = 0
         diagResults = 0
-        yuvPrev = null
-        yuvShiftCount = 0
-        yuvShiftSamples.setLength(0)
         stopInternal()
         wantOpen = true          // openDevice() closes it again if this is false
         startInternal()
@@ -496,15 +408,12 @@ class CameraController(
                     diagResults / span, diagImages / span, diagImages,
                     diagFrameMs, diagExposureMs, diagRange,
                 )
-                val report = if (d.mode == "yuvshift") {
-                    "$line; shifted frames=$yuvShiftCount of $diagImages samples=$yuvShiftSamples"
-                } else line
-                Log.i(TAG, report)
+                Log.i(TAG, line)
                 diag = null
                 stopInternal()
                 wantOpen = resume
                 if (resume) requestStart()
-                onDiagDone?.invoke(report)
+                onDiagDone?.invoke(line)
             }
         }, seconds * 1000L + 500)
     }
@@ -549,7 +458,7 @@ class CameraController(
         val d = device ?: return
         val s = session ?: return
         try {
-            s.setRepeatingRequest(buildRequest(d, s), rateProbe, handler)
+            s.setRepeatingRequest(buildRequest(d, s), null, handler)
         } catch (e: Exception) {
             onError("apply failed: ${e.message}")
         }
@@ -559,43 +468,9 @@ class CameraController(
         val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         reader?.let { b.addTarget(it.surface) }
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
-        // Nothing in this app wants stabilized frames, and EIS in particular
-        // shifts its crop a pixel at a time, which looks like the whole image
-        // shaking. Ask for both off explicitly rather than trusting defaults.
-        b.set(
-            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
-            CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
-        )
         b.set(CaptureRequest.JPEG_QUALITY, quality.coerceIn(1, 100).toByte())
         b.set(CaptureRequest.JPEG_ORIENTATION, orientation)
         chars?.let { c ->
-            val ois = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
-            if (ois != null && CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF in ois) {
-                b.set(
-                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
-                    CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF,
-                )
-            }
-            val af = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
-            if (focusAuto) {
-                val mode = when {
-                    CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO in af ->
-                        CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO
-                    CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE in af ->
-                        CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
-                    else -> CameraMetadata.CONTROL_AF_MODE_AUTO
-                }
-                b.set(CaptureRequest.CONTROL_AF_MODE, mode)
-            } else if (CameraMetadata.CONTROL_AF_MODE_OFF in af) {
-                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
-                // Infinity until we have seen a focused frame; after a
-                // recording, hold whatever continuous AF settled on.
-                if ((c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: -1f) >= 0f) {
-                    b.set(CaptureRequest.LENS_FOCUS_DISTANCE, lastFocus ?: 0f)
-                }
-            } else {
-                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO)
-            }
             val range = fpsRange(c, fps)
             b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
             // "jpeg+fixed": take exposure out of the picture, so the measurement
@@ -617,23 +492,7 @@ class CameraController(
             if (thumbs.any { it.width == 0 && it.height == 0 }) {
                 b.set(CaptureRequest.JPEG_THUMBNAIL_SIZE, Size(0, 0))
             }
-            // Let the HAL do the zoom where it can. Setting SCALER_CROP_REGION
-            // by hand makes some HALs alternate the crop centre by a pixel
-            // from frame to frame, which reads as a shaking picture.
-            val ratioRange = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
-            if (!zoomCapsLogged) {
-                zoomCapsLogged = true
-                Log.i(TAG, "zoom caps: ratio=$ratioRange digital=" +
-                    "${c.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)}")
-            }
-            if (ratioRange != null && zoom <= ratioRange.upper.toFloat()) {
-                b.set(
-                    CaptureRequest.CONTROL_ZOOM_RATIO,
-                    zoom.coerceIn(ratioRange.lower.toFloat(), ratioRange.upper.toFloat()),
-                )
-            } else {
-                cropRegion(c, zoom)?.let { b.set(CaptureRequest.SCALER_CROP_REGION, it) }
-            }
+            cropRegion(c, zoom)?.let { b.set(CaptureRequest.SCALER_CROP_REGION, it) }
         }
         return b.build()
     }
@@ -643,10 +502,6 @@ class CameraController(
         val img = try { rd.acquireNextImage() } catch (e: Exception) { null } ?: return
         try {
             if (diag != null) {            // count only: no copy, trim or send
-                if (diag?.mode == "yuvshift") {
-                    try { analyseYuvShift(img) }
-                    catch (e: Exception) { Log.w(TAG, "yuv shift check failed: ${e.message}") }
-                }
                 diagImages++
                 return
             }
@@ -696,50 +551,6 @@ class CameraController(
         } finally {
             img.close()
         }
-    }
-
-    /** Compare a static strip of consecutive raw Y planes for a horizontal step. */
-    private fun analyseYuvShift(img: Image) {
-        val p = img.planes[0]
-        val w = size.width
-        val h = size.height
-        val x0 = w / 6
-        val y0 = h * 140 / 720
-        val cw = minOf(w - x0 - 4, w * 900 / 1280)
-        val ch = minOf(h - y0 - 4, h * 90 / 720)
-        if (cw < 32 || ch < 16) return
-        val crop = ByteArray(cw * ch)
-        val buf = p.buffer
-        for (y in 0 until ch) {
-            val base = (y0 + y) * p.rowStride + x0 * p.pixelStride
-            for (x in 0 until cw) crop[y * cw + x] = buf.get(base + x * p.pixelStride)
-        }
-        val prev = yuvPrev
-        if (prev != null && prev.size == crop.size) {
-            fun score(dx: Int): Double {
-                var sum = 0L
-                var n = 0
-                for (y in 4 until ch - 4) {
-                    for (x in 4 until cw - 4) {
-                        sum += abs(prev[y * cw + x].toInt() - crop[y * cw + x + dx].toInt())
-                        n++
-                    }
-                }
-                return sum.toDouble() / n
-            }
-            val flat = score(0)
-            var best = flat
-            var bestDx = 0
-            for (dx in -2..2) {
-                val s = score(dx)
-                if (s < best) { best = s; bestDx = dx }
-            }
-            if (bestDx != 0 && flat - best > 1.5) {
-                yuvShiftCount++
-                if (yuvShiftSamples.length < 60) yuvShiftSamples.append("$bestDx ")
-            }
-        }
-        yuvPrev = crop
     }
 
     private fun trimSegmentPadding(src: ByteArray, len: Int): Int {
