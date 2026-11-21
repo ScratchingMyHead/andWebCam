@@ -332,6 +332,10 @@ class CameraController(
             // Remember where continuous AF settled so locking can hold that
             // distance instead of snapping to infinity.
             result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { lastFocus = it }
+            result.get(CaptureResult.LENS_OPTICAL_STABILIZATION_MODE)?.let { resultOis = it }
+            result.get(CaptureResult.CONTROL_VIDEO_STABILIZATION_MODE)?.let { resultEis = it }
+            result.get(CaptureResult.CONTROL_ZOOM_RATIO)?.let { resultZoom = it }
+            result.get(CaptureResult.SCALER_CROP_REGION)?.let { resultCrop = it }
             rateResults++
             if (diag != null) {
                 diagResults++
@@ -393,6 +397,28 @@ class CameraController(
     // continuous AF so somebody walking right up stays sharp.
     @Volatile private var focusAuto = false
     @Volatile private var lastFocus: Float? = null
+    private var zoomCapsLogged = false
+
+    /** What the camera actually reports on the last frame, for tuning. */
+    @Volatile private var resultOis = -1
+    @Volatile private var resultEis = -1
+    @Volatile private var resultZoom = -1f
+    @Volatile private var resultCrop: Rect? = null
+
+    fun captureInfo(): Map<String, Any?> {
+        val c = chars
+        return mapOf(
+            "zoomRange" to c?.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)?.toString(),
+            "digitalMax" to c?.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM),
+            "oisModes" to c?.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)?.contentToString(),
+            "afModes" to c?.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES)?.contentToString(),
+            "resultOis" to resultOis,
+            "resultEis" to resultEis,
+            "resultZoom" to resultZoom,
+            "resultCrop" to resultCrop?.toString(),
+            "focus" to lastFocus,
+        )
+    }
 
     fun setAutoFocus(on: Boolean) {
         if (focusAuto == on) return
@@ -544,7 +570,23 @@ class CameraController(
             if (thumbs.any { it.width == 0 && it.height == 0 }) {
                 b.set(CaptureRequest.JPEG_THUMBNAIL_SIZE, Size(0, 0))
             }
-            cropRegion(c, zoom)?.let { b.set(CaptureRequest.SCALER_CROP_REGION, it) }
+            // Let the HAL do the zoom where it can. Setting SCALER_CROP_REGION
+            // by hand makes some HALs alternate the crop centre by a pixel
+            // from frame to frame, which reads as a shaking picture.
+            val ratioRange = c.get(CameraCharacteristics.CONTROL_ZOOM_RATIO_RANGE)
+            if (!zoomCapsLogged) {
+                zoomCapsLogged = true
+                Log.i(TAG, "zoom caps: ratio=$ratioRange digital=" +
+                    "${c.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM)}")
+            }
+            if (ratioRange != null && zoom <= ratioRange.upper.toFloat()) {
+                b.set(
+                    CaptureRequest.CONTROL_ZOOM_RATIO,
+                    zoom.coerceIn(ratioRange.lower.toFloat(), ratioRange.upper.toFloat()),
+                )
+            } else {
+                cropRegion(c, zoom)?.let { b.set(CaptureRequest.SCALER_CROP_REGION, it) }
+            }
         }
         return b.build()
     }

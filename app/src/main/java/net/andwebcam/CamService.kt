@@ -624,6 +624,7 @@ class CamService : Service(), HttpServer.Host {
             "canReboot" to (getSystemService(DevicePolicyManager::class.java)
                 ?.isDeviceOwnerApp(packageName) == true),
             "updateNote" to Prefs.updateNote,
+            "captureInfo" to camera.captureInfo(),
         )
     }
 
