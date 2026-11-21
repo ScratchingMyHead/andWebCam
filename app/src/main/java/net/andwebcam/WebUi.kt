@@ -176,6 +176,15 @@ object WebUi {
         <select id="s_res"></select>
       </div>
       <div class="row">
+        <label>Streaming scale</label>
+        <select id="s_scale">
+          <option value="25">25%</option>
+          <option value="50">50%</option>
+          <option value="75">75%</option>
+          <option value="100">100%</option>
+        </select>
+      </div>
+      <div class="row">
         <label>Frame rate: <span id="v_fps"></span> fps</label>
         <select id="s_fps"></select>
       </div>
@@ -270,6 +279,12 @@ object WebUi {
         <button id="motionPaneClose" class="paneClose" title="Hide the motion pane" aria-label="Hide the motion pane">&raquo;</button>
       </div>
       <p class="err hidden" id="motionMsg"></p>
+      <h2>Pre-roll</h2>
+      <div class="row">
+        <label>Keep before the trigger: <span id="v_preroll">10</span> seconds</label>
+        <input id="s_preroll" type="number" min="0" max="30" step="1">
+      </div>
+      <p class="hint" id="preRollHint"></p>
       <h2>After motion stops</h2>
       <div class="row">
         <label>Keep recording for <span id="v_quiet">30</span> seconds</label>
@@ -661,6 +676,7 @@ function refresh() {
     }
     if (document.activeElement !== el('s_facing')) { el('s_facing').value = s.facing || 'back'; }
     if (document.activeElement !== el('s_res')) { el('s_res').value = (s.width || '') + 'x' + (s.height || ''); }
+    if (document.activeElement !== el('s_scale')) { el('s_scale').value = String(s.streamScale || 50); }
     if (document.activeElement !== el('s_fps')) { el('s_fps').value = String(s.fps || 15); }
     if (document.activeElement !== el('s_q')) { el('s_q').value = s.quality || 80; el('v_q').textContent = s.quality || 80; }
     if (document.activeElement !== el('s_zoom')) { el('s_zoom').max = String(s.maxZoom || 4); el('s_zoom').value = s.zoom || 1; el('v_zoom').textContent = Math.round((s.zoom || 1) * 10) / 10; }
@@ -711,6 +727,7 @@ el('s_res').onchange = function() {
   setSetting('resolution', this.value);
 };
 el('s_fps').onchange = function() { setSetting('fps', this.value); };
+el('s_scale').onchange = function() { setSetting('streamScale', this.value); };
 el('s_q').oninput = function() { el('v_q').textContent = this.value; };
 el('s_q').onchange = function() { setSetting('quality', this.value); };
 el('s_zoom').oninput = function() { el('v_zoom').textContent = Math.round(parseFloat(this.value) * 10) / 10; };
@@ -1249,6 +1266,12 @@ function motionTick() {
     // handle, and the number above it, back to the old configured value.
     if (document.activeElement !== el('s_quiet')) { el('s_quiet').value = d.quiet || 30; }
     el('v_quiet').textContent = d.quiet || 30;
+    if (document.activeElement !== el('s_preroll')) { el('s_preroll').value = d.preRoll || 0; }
+    el('v_preroll').textContent = d.preRoll || 0;
+    var est = d.preRollEstimate || {};
+    var hint = el('preRollHint');
+    hint.textContent = est.message || '';
+    hint.classList.toggle('err', !!est.tooHigh);
     if (document.activeElement !== el('s_level')) {
       el('s_level').value = d.level == null ? 85 : d.level;
       el('v_level').textContent = d.level == null ? 85 : d.level;
@@ -1464,6 +1487,14 @@ el('s_quiet').onchange = function() {
   this.value = v;
   el('v_quiet').textContent = v;
   post('/api/motion/quiet', { seconds: v });
+};
+el('s_preroll').oninput = function() { el('v_preroll').textContent = this.value; };
+el('s_preroll').onchange = function() {
+  var v = parseInt(this.value, 10) || 0;
+  v = Math.max(0, Math.min(30, v));
+  this.value = v;
+  el('v_preroll').textContent = v;
+  post('/api/motion/preroll', { seconds: v });
 };
 // The trigger level is the movement magnitude a cell must show before it
 // counts: higher catches smaller and subtler movement, lower ignores it.

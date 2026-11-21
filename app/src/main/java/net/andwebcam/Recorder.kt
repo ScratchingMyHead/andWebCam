@@ -42,6 +42,8 @@ class Recorder(private val ctx: Context) {
     companion object {
         private const val TAG = "andWebCam"
         const val VIDEOS_DIR = "video"
+        const val MEMORY_ERROR =
+            "Recording stopped: resolution and/or pre-roll is too high. Lower the resolution or pre-roll."
 
         /** Stop at this fraction of the cap, so the last write fits. */
         private const val STOP_MARGIN = 0.95
@@ -71,6 +73,15 @@ class Recorder(private val ctx: Context) {
 
     /** Invoked on the worker thread when a session has finished, whatever its outcome. */
     @Volatile var onStopped: (() -> Unit)? = null
+
+    @Volatile private var memoryFailure = false
+
+    /** Called when the camera reports an allocation failure during a session. */
+    fun failForMemory() {
+        memoryFailure = true
+        note(MEMORY_ERROR)
+        stopRequested = true
+    }
 
     private val cr: ContentResolver get() = ctx.contentResolver
     private val frameQueue = LinkedBlockingQueue<VideoRing.Frame>(128)
@@ -302,8 +313,11 @@ class Recorder(private val ctx: Context) {
      */
     private fun doStart(w: Int, h: Int, prefix: String) {
         if (recording) return
+        memoryFailure = false
         try {
             beginSession(w, h, prefix)
+        } catch (e: OutOfMemoryError) {
+            note(MEMORY_ERROR)
         } finally {
             if (!recording) starting = false
         }
@@ -439,6 +453,9 @@ class Recorder(private val ctx: Context) {
                 drainEncoder(enc, w, h, 0)
                 checkCap()
             }
+        } catch (e: OutOfMemoryError) {
+            memoryFailure = true
+            stopRequested = true
         } catch (e: Exception) {
             Log.w(TAG, "recording stopped on an error: ${e.message}", e)
         }
@@ -452,6 +469,7 @@ class Recorder(private val ctx: Context) {
         // the session that just ended, not to whatever comes next.
         frameQueue.clear()
         when {
+            memoryFailure -> note(MEMORY_ERROR)
             finished == 1 ->
                 note(if (stopForCap)
                     "Recording stopped: the storage cap was reached."

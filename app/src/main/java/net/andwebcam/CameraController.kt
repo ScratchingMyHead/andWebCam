@@ -385,6 +385,10 @@ class CameraController(
     private var diagExposureMs = 0f
     private var diagRange = ""
 
+    /** Rolling average of delivered frame sizes, for pre-roll memory estimates. */
+    @Volatile var avgFrameBytes = 0L
+        private set
+
     /** Called on the camera thread when a run finishes, with a one-line report. */
     @Volatile var onDiagDone: ((String) -> Unit)? = null
 
@@ -531,6 +535,7 @@ class CameraController(
             val t2 = System.nanoTime()
             stage(1, t1)                   // copy
             val size = trimSegmentPadding(bytes, bytes.size)
+            avgFrameBytes = if (avgFrameBytes == 0L) size.toLong() else (avgFrameBytes * 9 + size) / 10
             val t3 = System.nanoTime()
             stage(2, t2)                   // trim
             rateJpegs++
@@ -546,6 +551,8 @@ class CameraController(
             }
             onFrame(frame)
             stage(3, t3)                   // send
+        } catch (e: OutOfMemoryError) {
+            onError("camera frame allocation failed: resolution and/or pre-roll is too high")
         } catch (e: Exception) {
             onError("frame read failed: ${e.message}")
         } finally {

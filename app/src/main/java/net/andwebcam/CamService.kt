@@ -1,5 +1,6 @@
 package net.andwebcam
 
+import android.app.ActivityManager
 import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
@@ -74,6 +75,8 @@ class CamService : Service(), HttpServer.Host {
 
     private lateinit var hub: StreamHub
     private lateinit var camera: CameraController
+    private lateinit var scaler: StreamScaler
+    private val lastFull = java.util.concurrent.atomic.AtomicReference<ByteArray?>()
     private lateinit var server: HttpServer
     private val ring = VideoRing()
     private val recorder = Recorder(this)
@@ -124,6 +127,7 @@ class CamService : Service(), HttpServer.Host {
         super.onCreate()
         Prefs.init(this)
         hub = StreamHub()
+        scaler = StreamScaler({ jpeg -> hub.broadcast(jpeg) }, { hub.count > 0 })
         recorder.ringRef = ring
         recorder.onStopped = {
             motionOwned = false
@@ -146,13 +150,15 @@ class CamService : Service(), HttpServer.Host {
         // it in the file: the ring supplies those. A recording that is already
         // running - by hand, say - is left alone.
         motion.onTrigger = { zone ->
-            val err = if (recorder.recording) "recording already running" else null
+            val err = if (recorder.recording) "recording already running" else preRollBlock()
             if (err == null) {
                 val s = camera.currentSize
                 recorder.start(s.width, s.height, "zone$zone")
                 motionOwned = true
                 quietUntil = System.currentTimeMillis() + motion.quietSeconds() * 1000L
                 Log.i(TAG, "motion recording started (zone $zone)")
+            } else if (err != "recording already running") {
+                Log.w(TAG, "motion recording refused: $err")
             }
             mainHandler.post { updateNotification() }
         }
@@ -160,18 +166,22 @@ class CamService : Service(), HttpServer.Host {
             this,
             onFrame = { jpeg ->
                 if (State.lastError != null) State.lastError = null
+                lastFull.set(jpeg)
                 ring.push(jpeg)
                 recorder.push(jpeg)
                 motion.push(jpeg)
-                hub.broadcast(jpeg)
+                scaler.offer(jpeg, Prefs.streamScale, Prefs.quality)
             },
             onError = { msg ->
                 State.lastError = msg
+                if (msg.contains("allocation failed") && recorder.recording) recorder.failForMemory()
                 Log.w(TAG, msg)
                 scheduleCameraRetry()
             },
         )
         server = HttpServer(this, hub, this)
+        configureRing()
+        mainHandler.postDelayed({ configureRing() }, 3000)
         ensureChannel()
     }
 
@@ -587,6 +597,7 @@ class CamService : Service(), HttpServer.Host {
             "fps" to Prefs.fps,
             "fpsActive" to State.framesPerSec,
             "quality" to Prefs.quality,
+            "streamScale" to Prefs.streamScale,
             "torch" to Prefs.torch,
             "battery" to batteryLevel(),
             "charging" to batteryCharging(),
@@ -636,6 +647,7 @@ class CamService : Service(), HttpServer.Host {
                 "resolution" -> if (Prefs.resolution != v) { Prefs.resolution = v; restartCamera = true }
                 "fps" -> v.toIntOrNull()?.let { Prefs.fps = it }
                 "quality" -> v.toIntOrNull()?.let { Prefs.quality = it }
+                "streamScale" -> v.toIntOrNull()?.let { Prefs.streamScale = it }
                 "torch" -> Prefs.torch = v.toBoolean()
                 "zoom" -> v.toFloatOrNull()?.let { Prefs.zoom = it }
                 "orientation" -> v.toIntOrNull()?.let { Prefs.orientation = it }
@@ -664,6 +676,7 @@ class CamService : Service(), HttpServer.Host {
         } else {
             camera.applyLive()
         }
+        configureRing()
         if (restartNet) scheduleNetRestart()
         updateNotification()
     }
@@ -677,12 +690,11 @@ class CamService : Service(), HttpServer.Host {
 
     /**
      * A single JPEG at the current settings. While the camera is running the
-     * newest streamed frame is exactly what is on screen, so it is reused;
-     * otherwise one frame is captured, opening the camera if nobody is
-     * watching (and closing it again afterwards).
+     * newest full-resolution frame is reused; the stream may be downscaled,
+     * so the hub's copy is not necessarily full size.
      */
     override fun snapshot(): ByteArray? {
-        if (camera.active) hub.latest?.let { return it }
+        if (camera.active) lastFull.get()?.let { return it }
 
         val latch = java.util.concurrent.CountDownLatch(1)
         val out = arrayOfNulls<ByteArray>(1)
@@ -768,6 +780,7 @@ class CamService : Service(), HttpServer.Host {
         // the phone is meant to be idle, so it does not open the camera for
         // a file either.
         if (!streamingEnabled) return "Streaming is off. Turn it on to record."
+        preRollBlock()?.let { return it }
         // Frames come from the camera; a session that starts with it closed
         // would just fill the file with silence, so open it first.
         camera.start()
@@ -788,6 +801,64 @@ class CamService : Service(), HttpServer.Host {
         return err
     }
 
+    /** Human-readable megabytes, for the pre-roll warning. */
+    private fun mb(bytes: Long): String = String.format(java.util.Locale.US, "%.0f MB", bytes / 1_048_576.0)
+
+    /**
+     * How much memory the current pre-roll would need, and whether it fits.
+     * Based on the observed JPEG size and frame rate, not on a resolution
+     * guess: scene complexity changes JPEG size a lot.
+     */
+    fun preRollEstimate(): Map<String, Any?> {
+        val secs = Prefs.motionPreRoll
+        val fps = Prefs.fps.coerceAtLeast(1)
+        val avg = camera.avgFrameBytes
+        val bytes = if (secs == 0 || avg <= 0L) 0L else avg * fps * secs.toLong()
+        val am = getSystemService(ActivityManager::class.java)
+        val info = ActivityManager.MemoryInfo()
+        am?.getMemoryInfo(info)
+        val rt = Runtime.getRuntime()
+        val used = rt.totalMemory() - rt.freeMemory()
+        val headroom = (rt.maxMemory() - used).coerceAtLeast(0L)
+        val tooHigh = bytes > 0L &&
+            (bytes > headroom * 0.6 || bytes > info.availMem * 0.6)
+        val message = when {
+            secs == 0 -> "Pre-roll is off; recordings start at the trigger."
+            avg <= 0L -> "Measuring frame sizes..."
+            tooHigh -> "About ${mb(bytes)} for ${secs} s at ${fps} fps — too much. " +
+                "Only ${mb(minOf(headroom, info.availMem))} free. Lower the resolution or pre-roll."
+            else -> "About ${mb(bytes)} for ${secs} s at ${fps} fps."
+        }
+        return mapOf(
+            "seconds" to secs,
+            "fps" to fps,
+            "avgFrame" to avg,
+            "bytes" to bytes,
+            "headroom" to headroom,
+            "systemAvail" to info.availMem,
+            "maxHeap" to rt.maxMemory(),
+            "memoryClass" to (am?.memoryClass ?: 0),
+            "largeMemoryClass" to (am?.largeMemoryClass ?: 0),
+            "tooHigh" to tooHigh,
+            "message" to message,
+        )
+    }
+
+    /** Size the ring from the current estimate, with a little headroom. */
+    private fun configureRing() {
+        val secs = Prefs.motionPreRoll
+        val est = preRollEstimate()
+        val bytes = est["bytes"] as Long
+        val budget = if (secs == 0) 1L else bytes * 2 + 8L * 1024 * 1024
+        ring.configure(secs * 1000L, budget)
+    }
+
+    /** Refuse a start that would ask for more pre-roll memory than we have. */
+    private fun preRollBlock(): String? {
+        val est = preRollEstimate()
+        return if (est["tooHigh"] == true) est["message"] as String else null
+    }
+
     override fun motionInfo(since: Long): Map<String, Any?> {
         val now = System.currentTimeMillis()
         val zones = motion.snapshotSince(since).map {
@@ -802,6 +873,8 @@ class CamService : Service(), HttpServer.Host {
         return mapOf(
             "enabled" to motion.enabled,
             "quiet" to motion.quietSeconds(),
+            "preRoll" to Prefs.motionPreRoll,
+            "preRollEstimate" to preRollEstimate(),
             "level" to motion.triggerLevel(),
             "grid" to motion.gridSize(),
             "aspect" to motion.zoneAspect(),
@@ -815,6 +888,11 @@ class CamService : Service(), HttpServer.Host {
 
     override fun setMotionQuiet(seconds: Int) {
         motion.setQuiet(seconds)
+    }
+
+    override fun setMotionPreRoll(seconds: Int) {
+        Prefs.motionPreRoll = seconds
+        configureRing()
     }
 
     override fun setMotionLevel(level: Int) {

@@ -22,6 +22,7 @@ object Prefs {
     private const val KEY_SERVICE_NAME = "service_name"
     private const val KEY_FACING = "facing"
     private const val KEY_RESOLUTION = "resolution"
+    private const val KEY_STREAM_SCALE = "stream_scale"
     private const val KEY_FPS = "fps"
     private const val KEY_QUALITY = "quality"
     private const val KEY_TORCH = "torch"
@@ -40,6 +41,7 @@ object Prefs {
     private const val KEY_MOTION_ENABLED = "motion_enabled"
     private const val KEY_MOTION_ZONES = "motion_zones"
     private const val KEY_MOTION_QUIET = "motion_quiet"
+    private const val KEY_MOTION_PREROLL = "motion_preroll"
     private const val KEY_MOTION_LEVEL = "motion_level"
     private const val KEY_MOTION_GRID = "motion_grid"
 
@@ -95,6 +97,15 @@ object Prefs {
     var resolution: String
         get() = sp.getString(KEY_RESOLUTION, "")!!
         set(v) = edit { putString(KEY_RESOLUTION, v) }
+
+    /**
+     * Percentage of the camera's resolution sent to viewers. The recorder
+     * and motion analyser always use the full-resolution frames; only the
+     * stream is downscaled, and only while somebody is watching.
+     */
+    var streamScale: Int
+        get() = sp.getInt(KEY_STREAM_SCALE, 50)
+        set(v) = edit { putInt(KEY_STREAM_SCALE, if (v in listOf(25, 50, 75, 100)) v else 50) }
 
     var fps: Int
         get() = sp.getInt(KEY_FPS, 15)
@@ -219,6 +230,11 @@ object Prefs {
     var motionQuiet: Int
         get() = sp.getInt(KEY_MOTION_QUIET, 30)
         set(v) = edit { putInt(KEY_MOTION_QUIET, v.coerceIn(5, 300)) }
+
+    /** Seconds of pre-trigger frames the recorder keeps ready. 0 disables it. */
+    var motionPreRoll: Int
+        get() = sp.getInt(KEY_MOTION_PREROLL, 10)
+        set(v) = edit { putInt(KEY_MOTION_PREROLL, v.coerceIn(0, 30)) }
 
     /**
      * How much a cell's brightness must shift against its background before

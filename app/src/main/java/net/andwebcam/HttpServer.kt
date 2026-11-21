@@ -87,6 +87,9 @@ class HttpServer(
         /** Seconds of quiet after the last motion before a recording ends. */
         fun setMotionQuiet(seconds: Int)
 
+        /** Seconds of pre-trigger frames kept for a recording. */
+        fun setMotionPreRoll(seconds: Int)
+
         /** The cell-change sensitivity, 0-100, higher = more sensitive. */
         fun setMotionLevel(level: Int)
 
@@ -519,6 +522,14 @@ class HttpServer(
                 if (role != Role.ADMIN) unauthorized(output) else {
                     val vals = parseFlatJson(String(body))
                     host.setMotionQuiet(vals["seconds"]?.toIntOrNull() ?: 30)
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                }
+            }
+
+            method == "POST" && path == "/api/motion/preroll" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    host.setMotionPreRoll((vals["seconds"]?.toIntOrNull() ?: 10).coerceIn(0, 30))
                     respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                 }
             }

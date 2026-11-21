@@ -14,15 +14,21 @@ package net.andwebcam
  */
 class VideoRing(
     /** Keep frames this many milliseconds old at most. */
-    val maxAgeMs: Long = 10_000,
+    @Volatile var maxAgeMs: Long = 10_000,
     /** Hold at most this many bytes of frames; the oldest drop first. */
-    private val maxBytes: Long = 24L * 1024 * 1024,
+    private var maxBytes: Long = 24L * 1024 * 1024,
 ) {
     class Frame(val jpeg: ByteArray, val timeMs: Long)
 
     private val lock = Any()
     private val frames = ArrayList<Frame>()
     private var bytes = 0L
+
+    /** Reconfigure the window and byte budget; old frames age out naturally. */
+    fun configure(ageMs: Long, byteBudget: Long) = synchronized(lock) {
+        maxAgeMs = ageMs.coerceAtLeast(0L)
+        maxBytes = byteBudget.coerceAtLeast(1L)
+    }
 
     /**
      * Called from the camera's frame path; cheap, and must stay that way.
@@ -32,6 +38,11 @@ class VideoRing(
     fun push(jpeg: ByteArray) {
         val t = System.currentTimeMillis()
         synchronized(lock) {
+            if (maxAgeMs <= 0L) {
+                frames.clear()
+                bytes = 0
+                return
+            }
             frames.add(Frame(jpeg, t))
             bytes += jpeg.size
             val cutoff = t - maxAgeMs
