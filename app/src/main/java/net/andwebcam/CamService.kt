@@ -620,6 +620,7 @@ class CamService : Service(), HttpServer.Host {
             "motion" to motion.enabled,
             "motionZones" to motion.zoneCount(),
             "motionAspect" to motion.zoneAspect(),
+            "preRoll" to Prefs.motionPreRoll,
             // Latest analysis-tick numbers, for tuning from a distance.
             "motionDiag" to motion.diagnostics(),
             "autoStartStreaming" to Prefs.autoStartStreaming,

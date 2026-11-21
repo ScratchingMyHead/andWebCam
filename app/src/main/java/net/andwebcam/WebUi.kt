@@ -254,7 +254,7 @@ object WebUi {
       </div>
       <p class="err hidden" id="recMsg"></p>
       <p class="hint hidden" id="recNote"></p>
-      <p class="hint">Recording includes 10 second pre-roll buffer</p>
+      <p class="hint" id="recBufferHint">Recording includes 10 second pre-roll buffer</p>
 
       <h2>Storage</h2>
       <div class="row">
@@ -623,6 +623,10 @@ function refresh() {
     el('who').className = 'badge ' + (s.admin ? '' : (s.anonView ? 'anon' : 'locked'));
     el('who').title = s.auth ? 'Signed in with ' + s.auth : '';
     updateStatusText(s);
+    var pr = s.preRoll || 0;
+    el('recBufferHint').textContent = pr > 0
+      ? 'Recording includes a ' + pr + '-second pre-roll buffer'
+      : 'No pre-roll buffer';
     el('i_cam').textContent = s.facing || '-';
     el('i_res').textContent = (s.width || '?') + 'x' + (s.height || '?');
     el('i_fps').textContent = (s.fpsActive || 0) + ' / ' + (s.fps || '?') + ' fps';
