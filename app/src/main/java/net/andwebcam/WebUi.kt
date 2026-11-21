@@ -112,13 +112,15 @@ object WebUi {
  .mbox p:first-of-type { margin-top:12px }
  .mbox code { background:#0d0d0d; padding:2px 4px; border-radius:4px; font-size:11px; word-break:break-all }
  .mbox a { color:#7cc4ff }
- .recmodal { max-width:min(94vw,1100px); padding:10px; width:100% }
- .recmodal h2 { flex:1; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
- .recmodal a { display:inline-flex; align-items:center; background:#333; color:#fff; border-radius:6px; padding:7px 12px; font-size:13px; text-decoration:none }
- .recmodal a:hover { background:#3d3d3d }
- .recmodal video { width:100%; max-height:80vh; display:block; background:#000; margin-top:8px }
+ .recplayer { position:absolute; inset:0; z-index:10; background:#000d; display:flex; flex-direction:column; padding:8px; box-sizing:border-box }
+ .recplayer .rpbar { display:flex; align-items:center; gap:8px; margin-bottom:6px; color:#eee }
+ .recplayer .rpbar span { flex:1; min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px }
+ .recplayer a { display:inline-flex; align-items:center; background:#333; color:#fff; border-radius:6px; padding:6px 11px; font-size:12px; text-decoration:none }
+ .recplayer a:hover { background:#3d3d3d }
+ .recplayer video { flex:1; min-height:0; width:100%; display:block; background:#000; object-fit:contain }
  #recList { max-height:320px; overflow-y:auto; border:1px solid #222; border-radius:6px; padding-right:2px }
- .vrow.playing { background:#233; border-radius:6px }
+ .vrow.playing { background:#274a6b; box-shadow:inset 3px 0 0 #6cb6ff; border-radius:6px }
+ .vrow.playing .vname { color:#fff }
  #recPlay { width:100%; margin:9px 0 0; background:#000 }
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
@@ -160,6 +162,14 @@ object WebUi {
       <div class="vload">Loading video...</div>
       <div id="busy" class="busy hidden"><span class="spin"></span><span id="busyText">Applying...</span></div>
       <div id="stopped" class="overlay hidden"><div>Streaming is stopped</div><div id="stoppedHint" style="font-size:12px"></div></div>
+      <div id="recPlayerOverlay" class="recplayer hidden">
+        <div class="rpbar">
+          <span id="recPlayerName">Video</span>
+          <a id="recPlayerDl" href="#" download>Download</a>
+          <button id="recPlayerClose" class="paneClose" title="Close" aria-label="Close">&times;</button>
+        </div>
+        <video id="recPlay" controls></video>
+      </div>
     </div>
     <div id="motionDebugWrap" class="dbgwrap hidden">
       <div class="dbghead">Motion debug <span class="dbghint">rises over 2 points, newest first</span></div>
@@ -331,16 +341,6 @@ object WebUi {
   </div>
   <div class="foot" id="foot"></div>
 </main>
-<div class="modal hidden" id="recPlayerModal">
-  <div class="mbox recmodal">
-    <div class="actions">
-      <h2 id="recPlayerName">Video</h2>
-      <a id="recPlayerDl" class="secondary" href="#" download>Download</a>
-      <button id="recPlayerClose" class="paneClose" title="Close" aria-label="Close">&times;</button>
-    </div>
-    <video id="recPlay" controls></video>
-  </div>
-</div>
 <div class="modal hidden" id="dlHelpBox">
   <div class="mbox">
     <div class="actions">
@@ -1083,7 +1083,7 @@ function recStopPlayer() {
   var v = el('recPlay');
   try { v.pause(); } catch (e) {}
   v.removeAttribute('src');
-  el('recPlayerModal').classList.add('hidden');
+  el('recPlayerOverlay').classList.add('hidden');
   recPlaying = null;
   updatePlayButtons();
 }
@@ -1096,7 +1096,8 @@ function updatePlayButtons() {
     b[i].innerHTML = on ? ICON_STOP : ICON_PLAY;
     b[i].title = on ? 'Stop' : 'Play';
     b[i].setAttribute('aria-label', b[i].title + ' ' + b[i].getAttribute('data-play'));
-    b[i].parentNode.classList.toggle('playing', on);
+    var row = b[i].closest('.vrow');
+    if (row) { row.classList.toggle('playing', on); }
   }
 }
 
@@ -1107,7 +1108,7 @@ function recPlay(name) {
   var dl = el('recPlayerDl');
   dl.href = '/video/file/' + encodeURIComponent(name);
   dl.download = name;
-  el('recPlayerModal').classList.remove('hidden');
+  el('recPlayerOverlay').classList.remove('hidden');
   var v = el('recPlay');
   // The name is in the path so a browser's own download uses it; the query
   // form is still accepted for links made before this.
@@ -1607,9 +1608,9 @@ el('dlHelp').onclick = function(e) {
 el('dlHelpClose').onclick = function() { el('dlHelpBox').classList.add('hidden'); };
 el('dlHelpBox').onclick = function(e) { if (e.target === this) { this.classList.add('hidden'); } };
 el('recPlayerClose').onclick = function() { recStopPlayer(); };
-el('recPlayerModal').onclick = function(e) { if (e.target === this) { recStopPlayer(); } };
+el('recPlayerOverlay').onclick = function(e) { if (e.target === this) { recStopPlayer(); } };
 document.addEventListener('keydown', function(e) {
-  if (e.key === 'Escape' && !el('recPlayerModal').classList.contains('hidden')) { recStopPlayer(); }
+  if (e.key === 'Escape' && !el('recPlayerOverlay').classList.contains('hidden')) { recStopPlayer(); }
 });
 // The trust commands are written with the address this page is actually on,
 // so they work as pasted. The certificate itself is fetched with the page's
