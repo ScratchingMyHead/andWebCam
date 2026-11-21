@@ -112,6 +112,13 @@ object WebUi {
  .mbox p:first-of-type { margin-top:12px }
  .mbox code { background:#0d0d0d; padding:2px 4px; border-radius:4px; font-size:11px; word-break:break-all }
  .mbox a { color:#7cc4ff }
+ .recmodal { max-width:min(94vw,1100px); padding:10px; width:100% }
+ .recmodal h2 { flex:1; margin:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
+ .recmodal a { display:inline-flex; align-items:center; background:#333; color:#fff; border-radius:6px; padding:7px 12px; font-size:13px; text-decoration:none }
+ .recmodal a:hover { background:#3d3d3d }
+ .recmodal video { width:100%; max-height:80vh; display:block; background:#000; margin-top:8px }
+ #recList { max-height:320px; overflow-y:auto; border:1px solid #222; border-radius:6px; padding-right:2px }
+ .vrow.playing { background:#233; border-radius:6px }
  #recPlay { width:100%; margin:9px 0 0; background:#000 }
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
@@ -266,7 +273,6 @@ object WebUi {
       <p class="hint" id="recSpace">Free - · cap - · used -</p>
 
       <h2>Videos</h2>
-      <video id="recPlay" controls class="hidden"></video>
       <div id="recList">
         <p class="hint">Nothing recorded yet.</p>
       </div>
@@ -325,6 +331,16 @@ object WebUi {
   </div>
   <div class="foot" id="foot"></div>
 </main>
+<div class="modal hidden" id="recPlayerModal">
+  <div class="mbox recmodal">
+    <div class="actions">
+      <h2 id="recPlayerName">Video</h2>
+      <a id="recPlayerDl" class="secondary" href="#" download>Download</a>
+      <button id="recPlayerClose" class="paneClose" title="Close" aria-label="Close">&times;</button>
+    </div>
+    <video id="recPlay" controls></video>
+  </div>
+</div>
 <div class="modal hidden" id="dlHelpBox">
   <div class="mbox">
     <div class="actions">
@@ -1067,12 +1083,12 @@ function recStopPlayer() {
   var v = el('recPlay');
   try { v.pause(); } catch (e) {}
   v.removeAttribute('src');
-  v.classList.add('hidden');
+  el('recPlayerModal').classList.add('hidden');
   recPlaying = null;
   updatePlayButtons();
 }
-// The play icons change with what is playing, but that must not rebuild the
-// rows: rebuilding moves the player and kicks it out of fullscreen.
+// Keep each row's icon and highlight in step with what is playing in the
+// modal. The rows are never rebuilt for this, so the list does not move.
 function updatePlayButtons() {
   var b = el('recList').querySelectorAll('button[data-play]');
   for (var i = 0; i < b.length; i++) {
@@ -1080,30 +1096,19 @@ function updatePlayButtons() {
     b[i].innerHTML = on ? ICON_STOP : ICON_PLAY;
     b[i].title = on ? 'Stop' : 'Play';
     b[i].setAttribute('aria-label', b[i].title + ' ' + b[i].getAttribute('data-play'));
-  }
-}
-
-// Move the player under the row being played without rebuilding the list:
-// rebuilding would stutter playback, and moving a fullscreen element would
-// end fullscreen.
-function placePlayer() {
-  if (document.fullscreenElement || document.webkitFullscreenElement) { return; }
-  var list = el('recList');
-  var player = el('recPlay');
-  var row = list.querySelector('.vrow[data-name="' + (recPlaying || '') + '"]');
-  if (row && row.parentNode === list) {
-    list.insertBefore(player, row.nextSibling);
-  } else if (player.parentNode !== list.parentNode || player.nextSibling !== list) {
-    list.parentNode.insertBefore(player, list);
+    b[i].parentNode.classList.toggle('playing', on);
   }
 }
 
 function recPlay(name) {
   recPlaying = name;
   updatePlayButtons();
-  placePlayer();
+  el('recPlayerName').textContent = name;
+  var dl = el('recPlayerDl');
+  dl.href = '/video/file/' + encodeURIComponent(name);
+  dl.download = name;
+  el('recPlayerModal').classList.remove('hidden');
   var v = el('recPlay');
-  v.classList.remove('hidden');
   // The name is in the path so a browser's own download uses it; the query
   // form is still accepted for links made before this.
   v.src = '/video/file/' + encodeURIComponent(name);
@@ -1145,24 +1150,30 @@ function recRefresh() {
         (d.cap ? ((d.used || 0) / d.cap * 100).toFixed(1) : '0.0') + '%)';
     var vids = d.videos || [];
     var key = vids.map(function(v) { return v.name + ':' + v.size; }).join('|');
-    // Rebuilding the list means removing and re-inserting the player, and
-    // removing the fullscreen element ends fullscreen. Leave the list alone
-    // while it is fullscreen, and only rebuild when it really changed.
+    // The player lives in a modal now, so rebuilding never touches it. Only
+    // rebuild when the list really changed, and keep the scroll position
+    // anchored to the selected row so you do not lose your place.
     if (document.fullscreenElement || document.webkitFullscreenElement || key === recListKey) {
       updatePlayButtons();
       return;
     }
     recListKey = key;
     var list = el('recList');
-    var player = el('recPlay');
-    if (player.parentNode) { player.parentNode.removeChild(player); }
+    var keepTop = list.scrollTop;
+    var keepRel = null;
+    var before = list.querySelectorAll('.vrow');
+    for (var i = 0; i < before.length; i++) {
+      if (before[i].dataset.name === recPlaying) {
+        keepRel = before[i].getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+        break;
+      }
+    }
     list.innerHTML = '';
     if (!vids.length) {
       var p = document.createElement('p');
       p.className = 'hint';
       p.textContent = 'Nothing recorded yet.';
       list.appendChild(p);
-      list.parentNode.insertBefore(player, list);
       return;
     }
     // Newest first: the one just recorded is the one being looked for.
@@ -1221,14 +1232,17 @@ function recRefresh() {
       rows.push(row);
     });
     rows.forEach(function(r) { list.appendChild(r); });
-    // The player sits just below the row it is playing, so the row that was
-    // clicked stays put and the list does not jump while scrolling.
-    var at = -1;
-    for (var i = 0; i < rows.length; i++) {
-      if (rows[i].dataset.name === recPlaying) { at = i; break; }
+    list.scrollTop = keepTop;
+    if (keepRel != null) {
+      var after = list.querySelectorAll('.vrow');
+      for (var j = 0; j < after.length; j++) {
+        if (after[j].dataset.name === recPlaying) {
+          list.scrollTop = after[j].getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop - keepRel;
+          break;
+        }
+      }
     }
-    if (at >= 0) { list.insertBefore(player, rows[at].nextSibling); }
-    else { list.parentNode.insertBefore(player, list); }
+    updatePlayButtons();
   }).catch(function() {});
 }
 function recPollTick() { recRefresh(); }
@@ -1592,6 +1606,11 @@ el('dlHelp').onclick = function(e) {
 };
 el('dlHelpClose').onclick = function() { el('dlHelpBox').classList.add('hidden'); };
 el('dlHelpBox').onclick = function(e) { if (e.target === this) { this.classList.add('hidden'); } };
+el('recPlayerClose').onclick = function() { recStopPlayer(); };
+el('recPlayerModal').onclick = function(e) { if (e.target === this) { recStopPlayer(); } };
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape' && !el('recPlayerModal').classList.contains('hidden')) { recStopPlayer(); }
+});
 // The trust commands are written with the address this page is actually on,
 // so they work as pasted. The certificate itself is fetched with the page's
 // own credentials and saved from a blob, which needs no second TLS
