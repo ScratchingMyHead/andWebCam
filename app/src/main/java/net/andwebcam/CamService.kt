@@ -825,8 +825,9 @@ class CamService : Service(), HttpServer.Host {
         val message = when {
             secs == 0 -> "Pre-roll is off; recordings start at the trigger."
             avg <= 0L -> "Measuring frame sizes..."
-            tooHigh -> "About ${mb(bytes)} for ${secs} s at ${fps} fps — too much. " +
-                "Only ${mb(minOf(headroom, info.availMem))} free. Lower the resolution or pre-roll."
+            tooHigh -> "Warning: ${secs} s at ${fps} fps will use ${mb(bytes)} " +
+                "(leaving ${mb((minOf(headroom, info.availMem) - bytes).coerceAtLeast(0))} free). " +
+                "Reduce resolution or pre-roll."
             else -> "About ${mb(bytes)} for ${secs} s at ${fps} fps."
         }
         return mapOf(

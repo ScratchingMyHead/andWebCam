@@ -91,7 +91,6 @@ object WebUi {
  .zhdr { margin:6px 0 2px; font-size:11px; color:#889 }
  .zhdr span:nth-child(2) { text-align:left }
  .zrow .zslider { width:100%; margin-left:0 }
- .sensscale { display:flex; justify-content:space-between; font-size:11px; color:#889; margin:-4px 0 8px }
  .dbg { font-family:monospace; font-size:11px; color:#9aa; background:#0d0d0d; border:1px solid #222; border-radius:6px; padding:6px 8px; max-height:190px; overflow:auto; line-height:1.5 }
  .dbgwrap { width:100% }
  .dbghead { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#8ab; margin:0 0 4px }
@@ -255,7 +254,7 @@ object WebUi {
       </div>
       <p class="err hidden" id="recMsg"></p>
       <p class="hint hidden" id="recNote"></p>
-      <p class="hint">Recording includes 10 second buffer</p>
+      <p class="hint">Recording includes 10 second pre-roll buffer</p>
 
       <h2>Storage</h2>
       <div class="row">
@@ -279,29 +278,23 @@ object WebUi {
         <button id="motionPaneClose" class="paneClose" title="Hide the motion pane" aria-label="Hide the motion pane">&raquo;</button>
       </div>
       <p class="err hidden" id="motionMsg"></p>
-      <h2>Pre-roll</h2>
       <div class="row">
-        <label>Keep before the trigger: <span id="v_preroll">10</span> seconds</label>
+        <label>Pre-roll size: <span id="v_preroll">10</span> seconds</label>
         <input id="s_preroll" type="number" min="0" max="30" step="1">
       </div>
       <p class="hint" id="preRollHint"></p>
-      <h2>After motion stops</h2>
       <div class="row">
-        <label>Keep recording for <span id="v_quiet">30</span> seconds</label>
+        <label>Post-motion recording: <span id="v_quiet">30</span> seconds</label>
         <input id="s_quiet" type="number" min="5" max="300" step="1">
       </div>
-      <h2>Sensitivity</h2>
       <div class="row">
-        <label>Current level: <span id="v_level">85</span></label>
+        <label>Sensitivity: <span id="v_level">85</span></label>
         <input id="s_level" type="range" min="0" max="100" step="1">
       </div>
-      <div class="sensscale"><span>Less sensitive</span><span>More sensitive</span></div>
-      <h2>Grid size</h2>
       <div class="row">
-        <label>Cells across the long edge: <span id="v_grid">32</span></label>
+        <label>Grid count: <span id="v_grid">32</span></label>
         <input id="s_grid" type="range" min="4" max="160" step="1">
       </div>
-      <div class="sensscale"><span>Bigger cells</span><span>Smaller cells</span></div>
       <h2>Activation zones</h2>
       <div class="actions">
         <button id="zoneAdd" class="secondary">Add</button>
