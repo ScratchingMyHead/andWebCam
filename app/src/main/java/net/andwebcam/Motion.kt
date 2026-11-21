@@ -1,8 +1,10 @@
 package net.andwebcam
 
 import android.graphics.Bitmap
-import android.graphics.BitmapFactory
+import android.graphics.ImageDecoder
 import android.util.Log
+import java.nio.ByteBuffer
+import kotlin.math.round
 
 /**
  * Motion activation: watches the stream's own JPEG frames for objects moving
@@ -98,6 +100,7 @@ class Motion {
         private set
 
     private var lastTrigger = 0L
+    private var lastDecodeSig = ""
 
     // Latest tick's numbers, for the log and /api/status while tuning.
     @Volatile private var diagChanged = 0
@@ -290,26 +293,49 @@ class Motion {
     // ---- the analysis -----------------------------------------------------
 
     private fun analyse(jpeg: ByteArray) {
-        val opts = BitmapFactory.Options().apply { inSampleSize = sampleSize() }
-        val bmp = BitmapFactory.decodeByteArray(jpeg, 0, jpeg.size, opts) ?: return
+        // Decode straight to the size the analyser wants, whatever the camera
+        // was set to. ImageDecoder can target an arbitrary size (unlike
+        // BitmapFactory's power-of-two sampling) and honours the JPEG's EXIF
+        // orientation, so the analysis frame matches what the viewer sees.
+        var srcW = 0
+        var srcH = 0
+        var tw = TARGET_W
+        var th = TARGET_W
+        val bmp = ImageDecoder.decodeBitmap(
+            ImageDecoder.createSource(ByteBuffer.wrap(jpeg)),
+        ) { decoder, info, _ ->
+            // ImageInfo already accounts for the JPEG's EXIF orientation, so
+            // these are the dimensions the viewer sees. No extra rotation.
+            srcW = info.size.width
+            srcH = info.size.height
+            if (srcW >= srcH) {
+                tw = TARGET_W
+                th = Math.max(1, round(TARGET_W.toFloat() * srcH / srcW).toInt())
+            } else {
+                th = TARGET_W
+                tw = Math.max(1, round(TARGET_W.toFloat() * srcW / srcH).toInt())
+            }
+            decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
+            decoder.setTargetSize(tw, th)
+        }
         var w = bmp.width
         var h = bmp.height
         val pixels = IntArray(w * h)
         bmp.getPixels(pixels, 0, w, 0, 0, w, h)
         bmp.recycle()
+        val sig = "$srcW x $srcH -> $tw x $th"
+        if (sig != lastDecodeSig) {
+            lastDecodeSig = sig
+            Log.i(TAG, "motion decode: $sig (got ${w}x${h})")
+        }
 
-        // Luma only, then turned the same way up as the stream's viewer sees
-        // it: the zones were drawn on the rotated image.
+        // Luma only. ImageDecoder has already applied the JPEG's EXIF
+        // orientation, so no further rotation is needed here.
         var grey = ByteArray(w * h)
         for (i in pixels.indices) {
             val v = pixels[i]
             grey[i] = (((v shr 16 and 0xFF) * 66 + (v shr 8 and 0xFF) * 129 + (v and 0xFF) * 25) shr 8).toByte()
         }
-        val turned = turn(grey, w, h, Prefs.orientation)
-        grey = turned.first
-        w = turned.second
-        h = turned.third
-
         // The grid follows the user's setting, keeping cells roughly square
         // and the cell count along the long edge fixed.
         val cells = Prefs.motionGrid.coerceIn(4, 160)
@@ -540,44 +566,5 @@ class Motion {
             j = i
         }
         return inside
-    }
-
-    /**
-     * Decode small enough that the analysis frame is about [TARGET_W] wide:
-     * the sample size must be a power of two, so the real width lands within
-     * one step of the target.
-     */
-    private fun sampleSize(): Int {
-        val target = Prefs.resolution.split('x').let { (it.getOrNull(0)?.toIntOrNull() ?: TARGET_W) }
-        var sample = 1
-        while (target / (sample * 2) >= TARGET_W) sample *= 2
-        return sample
-    }
-
-    /** Turn grey pixels the way the JPEG's EXIF turns them for viewers. */
-    private fun turn(
-        grey: ByteArray,
-        w: Int,
-        h: Int,
-        degrees: Int,
-    ): Triple<ByteArray, Int, Int> {
-        when (((degrees % 360) + 360) % 360) {
-            90 -> {
-                val out = ByteArray(grey.size)
-                for (y in 0 until h) for (x in 0 until w) out[(h - 1 - y) * h + x] = grey[y * w + x]
-                return Triple(out, h, w)
-            }
-            180 -> {
-                val out = ByteArray(grey.size)
-                for (y in 0 until h) for (x in 0 until w) out[(h - 1 - y) * w + (w - 1 - x)] = grey[y * w + x]
-                return Triple(out, w, h)
-            }
-            270 -> {
-                val out = ByteArray(grey.size)
-                for (y in 0 until h) for (x in 0 until w) out[y * h + (w - 1 - x)] = grey[y * w + x]
-                return Triple(out, h, w)
-            }
-            else -> return Triple(grey, w, h)
-        }
     }
 }
