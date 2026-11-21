@@ -279,7 +279,7 @@ object WebUi {
       </div>
       <p class="err hidden" id="motionMsg"></p>
       <div class="row">
-        <label>Pre-roll size: <span id="v_preroll">10</span> seconds</label>
+        <label>Pre-roll buffer size: <span id="v_preroll">10</span> seconds</label>
         <input id="s_preroll" type="number" min="0" max="30" step="1">
       </div>
       <p class="hint" id="preRollHint"></p>
