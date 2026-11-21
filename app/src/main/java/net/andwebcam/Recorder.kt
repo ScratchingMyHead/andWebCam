@@ -72,6 +72,9 @@ class Recorder(private val ctx: Context) {
     /** Invoked on the worker thread when a session has finished, whatever its outcome. */
     @Volatile var onStopped: (() -> Unit)? = null
 
+    /** Invoked on the worker thread once a session is actually recording. */
+    @Volatile var onStarted: (() -> Unit)? = null
+
     private val cr: ContentResolver get() = ctx.contentResolver
     private val frameQueue = LinkedBlockingQueue<VideoRing.Frame>(128)
     private val jobs = LinkedBlockingQueue<() -> Unit>()
@@ -412,6 +415,7 @@ class Recorder(private val ctx: Context) {
         recording = true
         recStartMs = System.currentTimeMillis()
         lastNote = "Recording."
+        onStarted?.invoke()
         Log.i(TAG, "recording started: $tempName (${w}x$h) with ${enc.name}, ring carried ${ringFrames.size} frames")
         recordSession(enc, w, h)
     }

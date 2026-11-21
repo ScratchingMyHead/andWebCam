@@ -125,7 +125,9 @@ class CamService : Service(), HttpServer.Host {
         Prefs.init(this)
         hub = StreamHub()
         recorder.ringRef = ring
+        recorder.onStarted = { camera.setAutoFocus(true) }
         recorder.onStopped = {
+            camera.setAutoFocus(false)
             motionOwned = false
             // The camera may now be the last reason to stay open.
             mainHandler.post {

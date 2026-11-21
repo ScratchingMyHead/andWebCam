@@ -329,6 +329,9 @@ class CameraController(
             request: CaptureRequest,
             result: TotalCaptureResult,
         ) {
+            // Remember where continuous AF settled so locking can hold that
+            // distance instead of snapping to infinity.
+            result.get(CaptureResult.LENS_FOCUS_DISTANCE)?.let { lastFocus = it }
             rateResults++
             if (diag != null) {
                 diagResults++
@@ -384,6 +387,21 @@ class CameraController(
     private var diagFrameMs = 0f
     private var diagExposureMs = 0f
     private var diagRange = ""
+
+    // Focus is left locked between recordings, so a windy scene cannot make
+    // the lens hunt and move the whole picture. A recording switches it to
+    // continuous AF so somebody walking right up stays sharp.
+    @Volatile private var focusAuto = false
+    @Volatile private var lastFocus: Float? = null
+
+    fun setAutoFocus(on: Boolean) {
+        if (focusAuto == on) return
+        focusAuto = on
+        handler.post {
+            Log.i(TAG, "autofocus ${if (on) "on for recording" else "locked after recording"}")
+            applyLiveInternal()
+        }
+    }
 
     /** Called on the camera thread when a run finishes, with a one-line report. */
     @Volatile var onDiagDone: ((String) -> Unit)? = null
@@ -458,7 +476,7 @@ class CameraController(
         val d = device ?: return
         val s = session ?: return
         try {
-            s.setRepeatingRequest(buildRequest(d, s), null, handler)
+            s.setRepeatingRequest(buildRequest(d, s), rateProbe, handler)
         } catch (e: Exception) {
             onError("apply failed: ${e.message}")
         }
@@ -468,9 +486,43 @@ class CameraController(
         val b = d.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
         reader?.let { b.addTarget(it.surface) }
         b.set(CaptureRequest.CONTROL_MODE, CameraMetadata.CONTROL_MODE_AUTO)
+        // Nothing in this app wants stabilized frames, and EIS in particular
+        // shifts its crop a pixel at a time, which looks like the whole image
+        // shaking. Ask for both off explicitly rather than trusting defaults.
+        b.set(
+            CaptureRequest.CONTROL_VIDEO_STABILIZATION_MODE,
+            CameraMetadata.CONTROL_VIDEO_STABILIZATION_MODE_OFF,
+        )
         b.set(CaptureRequest.JPEG_QUALITY, quality.coerceIn(1, 100).toByte())
         b.set(CaptureRequest.JPEG_ORIENTATION, orientation)
         chars?.let { c ->
+            val ois = c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION)
+            if (ois != null && CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF in ois) {
+                b.set(
+                    CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE,
+                    CameraMetadata.LENS_OPTICAL_STABILIZATION_MODE_OFF,
+                )
+            }
+            val af = c.get(CameraCharacteristics.CONTROL_AF_AVAILABLE_MODES) ?: intArrayOf()
+            if (focusAuto) {
+                val mode = when {
+                    CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO in af ->
+                        CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_VIDEO
+                    CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE in af ->
+                        CameraMetadata.CONTROL_AF_MODE_CONTINUOUS_PICTURE
+                    else -> CameraMetadata.CONTROL_AF_MODE_AUTO
+                }
+                b.set(CaptureRequest.CONTROL_AF_MODE, mode)
+            } else if (CameraMetadata.CONTROL_AF_MODE_OFF in af) {
+                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_OFF)
+                // Infinity until we have seen a focused frame; after a
+                // recording, hold whatever continuous AF settled on.
+                if ((c.get(CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE) ?: -1f) >= 0f) {
+                    b.set(CaptureRequest.LENS_FOCUS_DISTANCE, lastFocus ?: 0f)
+                }
+            } else {
+                b.set(CaptureRequest.CONTROL_AF_MODE, CameraMetadata.CONTROL_AF_MODE_AUTO)
+            }
             val range = fpsRange(c, fps)
             b.set(CaptureRequest.CONTROL_AE_TARGET_FPS_RANGE, range)
             // "jpeg+fixed": take exposure out of the picture, so the measurement

@@ -53,6 +53,7 @@ object WebUi {
  button.danger { background:#8a3030 }
  button:disabled { opacity:.45; cursor:default }
  .actions { display:flex; gap:8px; flex-wrap:wrap }
+ .dbgact { margin-top:14px }
  .paneClose { margin-left:auto; padding:5px 10px; font-size:15px; line-height:1.1; background:#2b2b2b; color:#9ab }
  .paneClose:hover { background:#3a3a3a; color:#fff }
  .iconbtn { display:inline-flex; align-items:center; justify-content:center; padding:8px 10px; background:#333; color:#b9c6d4 }
@@ -286,7 +287,6 @@ object WebUi {
         <input id="s_grid" type="range" min="4" max="160" step="1">
       </div>
       <div class="sensscale"><span>Bigger cells</span><span>Smaller cells</span></div>
-      <div class="actions"><button id="dbgToggle" class="secondary">Hide debug</button></div>
       <h2>Activation zones</h2>
       <div class="actions">
         <button id="zoneAdd" class="secondary">Add</button>
@@ -297,6 +297,7 @@ object WebUi {
       <div class="zhdr"><span>ID</span><span>Minimum object size</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
       <div id="zoneList"><p class="hint">No zones yet.</p></div>
+      <div class="actions dbgact"><button id="dbgToggle" class="secondary">Hide debug</button></div>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
