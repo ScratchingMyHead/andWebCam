@@ -412,6 +412,24 @@ class CameraController(
     @Volatile private var resultZoom = -1f
     @Volatile private var resultCrop: Rect? = null
 
+    fun cameraListInfo(): List<Map<String, Any?>> = mgr.cameraIdList.map { id ->
+        val c = mgr.getCameraCharacteristics(id)
+        val map = c.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        mapOf(
+            "id" to id,
+            "facing" to when (c.get(CameraCharacteristics.LENS_FACING)) {
+                CameraCharacteristics.LENS_FACING_FRONT -> "front"
+                else -> "back"
+            },
+            "focal" to c.get(CameraCharacteristics.LENS_INFO_AVAILABLE_FOCAL_LENGTHS)?.contentToString(),
+            "maxZoom" to c.get(CameraCharacteristics.SCALER_AVAILABLE_MAX_DIGITAL_ZOOM),
+            "has720p" to (map?.getOutputSizes(ImageFormat.JPEG)
+                ?.any { it.width == 1280 && it.height == 720 } ?: false),
+            "sizes" to map?.getOutputSizes(ImageFormat.JPEG)
+                ?.joinToString { "${it.width}x${it.height}" },
+        )
+    }
+
     fun captureInfo(): Map<String, Any?> {
         val c = chars
         val map = c?.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)

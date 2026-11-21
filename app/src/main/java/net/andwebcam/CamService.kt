@@ -625,6 +625,7 @@ class CamService : Service(), HttpServer.Host {
                 ?.isDeviceOwnerApp(packageName) == true),
             "updateNote" to Prefs.updateNote,
             "captureInfo" to camera.captureInfo(),
+            "cameras" to camera.cameraListInfo(),
         )
     }
 
