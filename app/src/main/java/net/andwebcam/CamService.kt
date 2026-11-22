@@ -410,6 +410,8 @@ class CamService : Service(), HttpServer.Host {
 
     private fun restartMdns() {
         mdns?.stop()
+        mdns = null
+        if (!Prefs.mdnsEnabled) return
         mdns = Mdns(this, Prefs.serviceName, Prefs.port).also { it.start() }
     }
 
@@ -673,6 +675,7 @@ class CamService : Service(), HttpServer.Host {
             // Latest analysis-tick numbers, for tuning from a distance.
             "motionDiag" to motion.diagnostics(),
             "autoStartStreaming" to Prefs.autoStartStreaming,
+            "mdnsEnabled" to Prefs.mdnsEnabled,
             "lastError" to State.lastError,
             // The folder holding the on-disk copy of the log; null while none
             // has been chosen. The page shows it and offers the picker.
@@ -690,6 +693,7 @@ class CamService : Service(), HttpServer.Host {
     override fun applySettings(vals: Map<String, String>) {
         var restartCamera = false
         var restartNet = false
+        var restartMdns = false
         val oldResolution = Prefs.resolution
         val oldOrientation = Prefs.orientation
         for ((k, v) in vals) {
@@ -708,6 +712,9 @@ class CamService : Service(), HttpServer.Host {
                 "serviceName" -> if (Prefs.serviceName != v.lowercase()) { Prefs.serviceName = v; restartNet = true }
                 "port" -> v.toIntOrNull()?.let { if (it != Prefs.port) { Prefs.port = it; restartNet = true } }
                 "adminPath" -> Prefs.adminPath = v
+                "mdnsEnabled" -> if (Prefs.mdnsEnabled != v.toBoolean()) {
+                    Prefs.mdnsEnabled = v.toBoolean(); restartMdns = true
+                }
             }
         }
         // Zones are drawn in the displayed frame's coordinates. A change that
@@ -729,6 +736,7 @@ class CamService : Service(), HttpServer.Host {
             camera.applyLive()
         }
         configureRing()
+        if (restartMdns) restartMdns()
         if (restartNet) scheduleNetRestart()
         updateNotification()
     }

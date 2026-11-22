@@ -195,15 +195,6 @@ object WebUi {
         <select id="s_res"></select>
       </div>
       <div class="row">
-        <label>Streaming scale</label>
-        <select id="s_scale">
-          <option value="25">25%</option>
-          <option value="50">50%</option>
-          <option value="75">75%</option>
-          <option value="100">100%</option>
-        </select>
-      </div>
-      <div class="row">
         <label>Frame rate: <span id="v_fps"></span> fps</label>
         <select id="s_fps"></select>
       </div>
@@ -231,9 +222,6 @@ object WebUi {
       <h2>Access</h2>
       <div class="row">
         <label class="check"><input id="s_anon" type="checkbox"> Allow anonymous view-only access</label>
-      </div>
-      <div class="row">
-        <label class="check"><input id="auto" type="checkbox"> Start streaming when the service starts</label>
       </div>
       <div class="row">
         <label>Admin page path (blank puts admin at /)</label>
@@ -283,16 +271,31 @@ object WebUi {
         <p class="hint" id="certMsg"></p>
       </details>
 
-      <h2>Service</h2>
-      <div class="row">
-        <label>Name (hostname: <span id="v_host">NAME</span>.local)</label>
-        <input id="s_name" type="text">
-      </div>
-      <div class="row">
-        <label>HTTPS port</label>
-        <input id="s_port" type="number" min="1" max="65535">
-      </div>
-      <button id="apply">Apply service settings</button>
+      <details class="certbox">
+        <summary>Service</summary>
+        <div class="row">
+          <label>Name (hostname: <span id="v_host">NAME</span>.local)</label>
+          <input id="s_name" type="text">
+        </div>
+        <div class="row">
+          <label>HTTPS port</label>
+          <input id="s_port" type="number" min="1" max="65535">
+        </div>
+        <div class="row">
+          <label class="check"><input id="auto" type="checkbox"> Start streaming when the service starts</label>
+        </div>
+        <div class="row">
+          <label>Streaming scale</label>
+          <select id="s_scale">
+            <option value="25">25%</option>
+            <option value="50">50%</option>
+            <option value="75">75%</option>
+            <option value="100">100%</option>
+          </select>
+        </div>
+        <div class="row"><label class="check"><input id="s_mdns" type="checkbox"> Advertise on the LAN (mDNS)</label></div>
+        <button id="apply">Apply service settings</button>
+      </details>
 
       <h2>Admin password</h2>
       <div class="row">
@@ -787,6 +790,7 @@ function refresh() {
     el('s_torch').disabled = !s.torchAvailable;
     if (document.activeElement !== el('s_anon')) { el('s_anon').checked = !!s.anonView; }
     if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
+    if (document.activeElement !== el('s_mdns')) { el('s_mdns').checked = s.mdnsEnabled !== false; }
     if (document.activeElement !== el('s_adminpath')) { el('s_adminpath').value = s.adminPath || ''; }
     updateCert(s.cert || {});
   }).catch(function() {
@@ -839,6 +843,7 @@ el('s_orient').onchange = function() { setSetting('orientation', this.value); };
 el('s_torch').onchange = function() { setSetting('torch', this.checked); };
 el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
+el('s_mdns').onchange = function() { setSetting('mdnsEnabled', this.checked); };
 el('s_adminpath').onchange = function() { setSetting('adminPath', this.value); };
 function certToggle(key, value) {
   var o = {}; o[key] = value;

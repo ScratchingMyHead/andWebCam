@@ -31,6 +31,7 @@ object Prefs {
     private const val KEY_ZOOM = "zoom"
     private const val KEY_ORIENTATION = "orientation"
     private const val KEY_ANON_VIEW = "anon_view"
+    private const val KEY_MDNS = "mdns_enabled"
     private const val KEY_AUTO_START_STREAM = "auto_start_stream"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BATTERY_ASKED = "battery_asked"
@@ -130,6 +131,11 @@ object Prefs {
     var serviceName: String
         get() = sp.getString(KEY_SERVICE_NAME, "andwebcam")!!.ifBlank { "andwebcam" }
         set(v) = edit { putString(KEY_SERVICE_NAME, sanitizeName(v)) }
+
+    /** Advertise the camera on the LAN over mDNS. */
+    var mdnsEnabled: Boolean
+        get() = sp.getBoolean(KEY_MDNS, true)
+        set(v) = edit { putBoolean(KEY_MDNS, v) }
 
     var facing: String
         get() = sp.getString(KEY_FACING, "back")!!
