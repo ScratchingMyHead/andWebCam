@@ -32,6 +32,9 @@ class Motion {
         private const val TARGET_W = 320            // analysis frame width
         private const val PREVIEW_MS = 10_000L      // pane lease; poll refreshes it
         private const val MIN_HITS = 2              // object must survive two ticks
+        private const val FIRST_SIGHT_LEVEL = 10    // big enough to draw on first sighting
+        private const val UNCONFIRMED_MS = 600L     // a one-tick track is short-lived
+        private const val TRACK_MS = 1500L          // confirmed tracks linger a little
     }
 
     /** A parsed zone with its live state. */
@@ -423,11 +426,15 @@ class Motion {
             val c = cand[i]
             tracks.add(Track(c.x, c.y, c.w, c.h, c.level, nextTrackId++))
         }
-        tracks.removeAll { now - it.seen > 1500 }
+        // An object seen on only one tick is probably real but unproven, so it
+        // is kept just long enough to draw a box, not for a second and a half.
+        tracks.removeAll {
+            now - it.seen > if (it.hits >= MIN_HITS) TRACK_MS else UNCONFIRMED_MS
+        }
         while (tracks.size > 16) tracks.removeAt(0)
-        // A big, confident object is worth drawing on the first sighting;
+        // A reasonably sized object is worth drawing on the first sighting;
         // small specks still need two ticks to prove they are not noise.
-        val visible = tracks.filter { it.hits >= MIN_HITS || it.level >= 40 }
+        val visible = tracks.filter { it.hits >= MIN_HITS || it.level >= FIRST_SIGHT_LEVEL }
 
         var nowActive = false
         val fired = ArrayList<Int>()
