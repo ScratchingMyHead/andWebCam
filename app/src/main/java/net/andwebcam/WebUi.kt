@@ -396,7 +396,7 @@ object WebUi {
       <div class="zhdr"><span>ID</span><span>Object size: min / max</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
       <div id="zoneList"><p class="hint">No zones yet.</p></div>
-      <div class="actions dbgact"><button id="dbgToggle" class="secondary">Hide debug</button></div>
+      <div class="actions dbgact"><button id="dbgToggle" class="secondary">Show debug</button></div>
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
@@ -1085,7 +1085,7 @@ el('doUpdate').onclick = function() {
 var PANES = { paneToggle: 'settings', recPaneToggle: 'recording', motionPaneToggle: 'motion' };
 var PANE_TITLES = { settings: 'the settings pane', recording: 'the recording pane', motion: 'the motion pane' };
 var pane = 'settings';
-var debugOpen = true;
+var debugOpen = false;
 function applyPane() {
   var admin = !!(window.S && window.S.admin);
   var open = pane;
