@@ -44,6 +44,8 @@ object Prefs {
     private const val KEY_MOTION_PREROLL = "motion_preroll"
     private const val KEY_MOTION_LEVEL = "motion_level"
     private const val KEY_MOTION_GRID = "motion_grid"
+    private const val KEY_CERT_ENABLED = "cert_enabled"
+    private const val KEY_DDNS_ENABLED = "ddns_enabled"
     private const val KEY_CERT_DOMAIN = "cert_domain"
     private const val KEY_CERT_TOKEN = "cert_token"
     private const val KEY_CERT_METHOD = "cert_method"
@@ -264,6 +266,16 @@ object Prefs {
         set(v) = edit { putInt(KEY_MOTION_GRID, v.coerceIn(4, 160)) }
 
     // ---- public certificate -----------------------------------------------
+
+    /** Issue and serve a Let's Encrypt certificate. */
+    var certEnabled: Boolean
+        get() = sp.getBoolean(KEY_CERT_ENABLED, true)
+        set(v) = edit { putBoolean(KEY_CERT_ENABLED, v) }
+
+    /** Keep the DuckDNS A record pointed at this phone. Independent of the cert. */
+    var ddnsEnabled: Boolean
+        get() = sp.getBoolean(KEY_DDNS_ENABLED, true)
+        set(v) = edit { putBoolean(KEY_DDNS_ENABLED, v) }
 
     /** The DNS name the Let's Encrypt certificate is issued for. */
     var certDomain: String

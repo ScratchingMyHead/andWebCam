@@ -238,6 +238,8 @@ object WebUi {
 
       <details class="certbox">
         <summary>Public certificate</summary>
+        <div class="row"><label class="check"><input id="s_cenable" type="checkbox"> Let's Encrypt certificate</label></div>
+        <div class="row"><label class="check"><input id="s_ddnsenable" type="checkbox"> DuckDNS address updates</label></div>
         <div class="row">
           <label>Domain</label>
           <input id="s_cdom" type="text" placeholder="cam.duckdns.org" spellcheck="false">
@@ -272,7 +274,7 @@ object WebUi {
         </div>
         <div class="actions">
           <button id="certSave">Save certificate settings</button>
-          <button id="certIssue">Get certificate</button>
+          <button id="certIssue">Renew certificate</button>
         </div>
         <p class="hint" id="certMsg"></p>
       </details>
@@ -677,7 +679,10 @@ setInterval(function() {
 
 var certMsgHold = 0;
 function certText(c) {
-  if (c.busy) { return 'Getting certificate...'; }
+  if (c.busy) { return 'Renewing certificate...'; }
+  if (!c.enabled && !c.ddnsEnabled) { return 'Both certificate and DuckDNS updates are off.'; }
+  if (!c.enabled) { return 'Let\'s Encrypt is off.'; }
+  if (!c.ddnsEnabled) { return 'DuckDNS updates are off.'; }
   if (c.error) { return c.error; }
   var ci = c.cert || {};
   if (ci.valid) {
@@ -687,6 +692,11 @@ function certText(c) {
   return c.domain ? 'No certificate for ' + c.domain + ' yet.' : 'No certificate yet.';
 }
 function updateCert(c) {
+  if (document.activeElement !== el('s_cenable')) { el('s_cenable').checked = c.enabled !== false; }
+  if (document.activeElement !== el('s_ddnsenable')) { el('s_ddnsenable').checked = c.ddnsEnabled !== false; }
+  var certOnly = ['s_cmethod', 's_cstage', 's_cport', 's_pport', 'certIssue'];
+  for (var j = 0; j < certOnly.length; j++) { el(certOnly[j]).disabled = c.enabled === false; }
+  el('s_cip').disabled = c.ddnsEnabled === false;
   if (document.activeElement !== el('s_cdom')) { el('s_cdom').value = c.domain || ''; }
   if (document.activeElement !== el('s_cmethod')) { el('s_cmethod').value = c.method || 'dns-01'; }
   if (document.activeElement !== el('s_cip')) { el('s_cip').value = c.publish || 'lan'; }
@@ -698,8 +708,8 @@ function updateCert(c) {
     el('certMsg').textContent = certText(c);
     el('certMsg').style.color = c.error ? '#f66' : '#888';
   }
-  el('certIssue').disabled = !!c.busy;
-  el('certIssue').textContent = c.busy ? 'Working...' : 'Get certificate';
+  el('certIssue').disabled = c.enabled === false || !!c.busy;
+  el('certIssue').textContent = c.busy ? 'Renewing...' : 'Renew certificate';
 }
 
 function refresh() {
@@ -824,6 +834,12 @@ el('s_orient').onchange = function() { setSetting('orientation', this.value); };
 el('s_torch').onchange = function() { setSetting('torch', this.checked); };
 el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
+function certToggle(key, value) {
+  var o = {}; o[key] = value;
+  post('/api/cert/save', o).then(function() { setTimeout(refresh, 300); });
+}
+el('s_cenable').onchange = function() { certToggle('enabled', this.checked); };
+el('s_ddnsenable').onchange = function() { certToggle('ddnsEnabled', this.checked); };
 el('certSave').onclick = function() {
   var o = {
     domain: el('s_cdom').value,
@@ -846,7 +862,7 @@ el('certSave').onclick = function() {
   }).catch(function() { b.disabled = false; });
 };
 el('certIssue').onclick = function() {
-  el('certMsg').textContent = 'Getting certificate...';
+  el('certMsg').textContent = 'Renewing certificate...';
   post('/api/cert/issue', {}).then(function(r) {
     if (r.ok === false) { el('certMsg').textContent = 'Not authorized'; }
     setTimeout(refresh, 500);

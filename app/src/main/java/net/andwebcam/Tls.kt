@@ -165,7 +165,7 @@ object Tls {
     @Synchronized
     internal fun publicIdentity(ctx: Context): PublicIdentity? {
         val name = Prefs.certDomain
-        if (name.isEmpty()) return null
+        if (!Prefs.certEnabled || name.isEmpty()) return null
         val dir = File(ctx.applicationContext.filesDir, DIR)
         val certFile = File(dir, PUB_CERT)
         val keyFile = File(dir, PUB_KEY)

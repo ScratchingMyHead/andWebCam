@@ -58,6 +58,8 @@ object Acme {
     // ---- public surface ---------------------------------------------------
 
     fun status(ctx: Context): Map<String, Any?> = mapOf(
+        "enabled" to Prefs.certEnabled,
+        "ddnsEnabled" to Prefs.ddnsEnabled,
         "domain" to Prefs.certDomain,
         "method" to Prefs.certMethod,
         "publish" to Prefs.certPublish,
@@ -72,6 +74,8 @@ object Acme {
     )
 
     fun configure(vals: Map<String, String>) {
+        vals["enabled"]?.let { Prefs.certEnabled = it.toBoolean() }
+        vals["ddnsEnabled"]?.let { Prefs.ddnsEnabled = it.toBoolean() }
         vals["domain"]?.let { Prefs.certDomain = it }
         vals["token"]?.let { Prefs.certToken = it }
         vals["method"]?.let { Prefs.certMethod = it }
@@ -115,6 +119,10 @@ object Acme {
     }
 
     fun issueAsync(ctx: Context) {
+        if (!Prefs.certEnabled) {
+            lastError = "Public certificates are disabled"
+            return
+        }
         if (!begin()) return
         Thread {
             try {
@@ -141,9 +149,12 @@ object Acme {
     /** Called on the renewal thread: publish the address, renew when due. */
     private fun check(ctx: Context) {
         if (Prefs.certDomain.isEmpty()) return
-        try { publishIp(ctx) } catch (e: Exception) {
-            Log.w(TAG, "DDNS update failed: ${e.message}")
+        if (Prefs.ddnsEnabled) {
+            try { publishIp(ctx) } catch (e: Exception) {
+                Log.w(TAG, "DDNS update failed: ${e.message}")
+            }
         }
+        if (!Prefs.certEnabled) return
         val have = certInfo(ctx)
         val due = have == null || have.domain != Prefs.certDomain ||
             System.currentTimeMillis() > have.issued + (have.notAfter - have.issued) * 2 / 3
@@ -294,6 +305,7 @@ object Acme {
     // ---- DuckDNS ----------------------------------------------------------
 
     private fun publishIp(ctx: Context, force: Boolean = false) {
+        if (!Prefs.ddnsEnabled) return
         val mode = Prefs.certPublish
         val domain = Prefs.certDomain
         val token = Prefs.certToken
