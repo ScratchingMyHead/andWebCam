@@ -452,26 +452,29 @@ class Motion {
         synchronized(zones) {
             for ((index, zone) in zones.withIndex()) {
                 var biggest = 0
-                var acceptable = 0
                 for (track in visible) {
                     if (!overlapsZone(track, zone.points)) continue
                     if (track.level > biggest) biggest = track.level
                     // Levels stop at 100, so max 100 means no upper bound.
                     val fits = track.level >= zone.sensitivity &&
                         (zone.max >= 100 || track.level <= zone.max)
-                    if (fits && track.level > acceptable) acceptable = track.level
                     if (track.zone == 0) {
                         track.zone = index + 1
                         track.firing = fits
                     }
                 }
+                // Trigger on the largest object in the zone, the same value
+                // its meter shows. Otherwise a small fragment of a vehicle
+                // could fire a zone the vehicle itself is too big for.
+                val fires = biggest >= zone.sensitivity &&
+                    (zone.max >= 100 || biggest <= zone.max)
                 if (biggest > biggestAny) biggestAny = biggest
                 zone.level = biggest
                 tickLevels[index] = biggest
                 if (biggest > overall) overall = biggest
                 if (levels.isNotEmpty()) levels.append(' ')
                 levels.append("z${index + 1}=$biggest")
-                if (enabled && acceptable > 0) {
+                if (enabled && fires) {
                     nowActive = true
                     if (now - lastTrigger > COOLDOWN_MS) {
                         lastTrigger = now

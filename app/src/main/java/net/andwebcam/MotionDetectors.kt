@@ -2,6 +2,7 @@ package net.andwebcam
 
 import android.graphics.Bitmap
 import android.util.Log
+import kotlin.math.ln
 import kotlin.math.max
 import kotlin.math.min
 import kotlin.math.round
@@ -296,6 +297,11 @@ class CvDetector : FrameDetector {
             // pixels at this size; an over-large minimum loses those entirely.
             val minArea = n * (0.0008 + (100 - sensitivity) * 0.00004)
             val maxArea = n * 0.12
+            // The slider is logarithmic between the smallest detectable blob
+            // and 12% of the frame. A linear area scale squeezed everything
+            // from a speck to a distant car into the bottom ten points, so a
+            // limit of 6 could not express "bigger than a vehicle".
+            val levelSpan = ln(maxArea / minArea)
             val out = ArrayList<Detection>()
             var rejected = 0
             var peak = 0.0
@@ -322,7 +328,8 @@ class CvDetector : FrameDetector {
                         y = r.y.toFloat() / h,
                         w = r.width.toFloat() / w,
                         h = r.height.toFloat() / h,
-                        level = (area * 100 / maxArea).toInt().coerceIn(1, 100),
+                        level = (100.0 * ln(max(area, minArea) / minArea) / levelSpan)
+                            .toInt().coerceIn(1, 100),
                     )
                 )
             }
@@ -366,7 +373,18 @@ class CvDetector : FrameDetector {
             vb += a * a; vc += b * b; cov += a * b
         }
         if (vb < 1.0) return false  // a flat background: compare normally
-        if (vc < vb * 0.15) return true  // clipped to a flat bright patch
+        if (vc < vb * 0.15) {
+            // A flat crop is only a clipped reflection if it is brighter than
+            // what was behind it *and* has saturated pixels. Smooth clothing
+            // is flat too, and calling it "light" made pedestrians and
+            // cyclists disappear.
+            if (mc <= mb + 12) return false
+            var hot = 0
+            for (yy in y0 until y1 step 2) for (xx in x0 until x1 step 2) {
+                if (cur[yy * w + xx] >= 235f) hot++
+            }
+            return hot * 4 >= count
+        }
         val corr = cov / sqrt(vb * vc)
         return corr > 0.55
     }
