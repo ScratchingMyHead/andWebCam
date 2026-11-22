@@ -19,6 +19,8 @@ object Prefs {
     private const val FILE = "andwebcam"
 
     private const val KEY_PORT = "port"
+    private const val KEY_ADMIN_PATH = "admin_path"
+    private const val KEY_ADMIN_PATH_SET = "admin_path_set"
     private const val KEY_SERVICE_NAME = "service_name"
     private const val KEY_FACING = "facing"
     private const val KEY_RESOLUTION = "resolution"
@@ -71,6 +73,7 @@ object Prefs {
         if (!::sp.isInitialized) {
             sp = ctx.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
             ensureAdminPassword()
+            ensureAdminPath()
         }
     }
 
@@ -84,6 +87,18 @@ object Prefs {
         }
     }
 
+    private fun ensureAdminPath() {
+        if (sp.getBoolean(KEY_ADMIN_PATH_SET, false)) return
+        val existing = sp.getString(KEY_ADMIN_PATH, "") ?: ""
+        if (existing.length != 8) {
+            val bytes = ByteArray(4)
+            rng.nextBytes(bytes)
+            sp.edit().putString(KEY_ADMIN_PATH, bytes.joinToString("") { "%02x".format(it) }).apply()
+        }
+        // From now on the value is ours to change, including deliberately blank.
+        sp.edit().putBoolean(KEY_ADMIN_PATH_SET, true).apply()
+    }
+
     private fun edit(block: SharedPreferences.Editor.() -> Unit) =
         sp.edit().apply(block).apply()
 
@@ -92,6 +107,24 @@ object Prefs {
     var port: Int
         get() = sp.getInt(KEY_PORT, 8443)
         set(v) = edit { putInt(KEY_PORT, v.coerceIn(1, 65535)) }
+
+    /**
+     * Where the admin UI lives. A random string by default; blank means the
+     * admin page takes over "/" and the bare webcam view is not served.
+     */
+    var adminPath: String
+        get() = sp.getString(KEY_ADMIN_PATH, "")!!
+        set(v) = edit {
+            val clean = v.trim().trim('/').lowercase()
+            putString(
+                KEY_ADMIN_PATH,
+                if (clean.isEmpty() || clean.matches(Regex("[a-z0-9-]{1,32}"))) clean else adminPath
+            )
+            putBoolean(KEY_ADMIN_PATH_SET, true)
+        }
+
+    /** Never sent to anonymous viewers. */
+    val adminUrl: String get() = if (adminPath.isEmpty()) "/" else "/$adminPath"
 
     /** mDNS hostname stem; the advertised name is "<serviceName>.local". */
     var serviceName: String

@@ -220,7 +220,7 @@ class MainActivity : Activity() {
 
     private fun update() {
         val name = "${Prefs.serviceName}.local"
-        val url = "https://$name:${Prefs.port}/"
+        val url = "https://$name:${Prefs.port}${Prefs.adminUrl}"
         val enabled = Prefs.enabled
         showSwitch(enabled)
         statusView.text = when {

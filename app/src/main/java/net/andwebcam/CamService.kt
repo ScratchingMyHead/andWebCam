@@ -707,6 +707,7 @@ class CamService : Service(), HttpServer.Host {
                 "streaming" -> setStreaming(v.toBoolean())
                 "serviceName" -> if (Prefs.serviceName != v.lowercase()) { Prefs.serviceName = v; restartNet = true }
                 "port" -> v.toIntOrNull()?.let { if (it != Prefs.port) { Prefs.port = it; restartNet = true } }
+                "adminPath" -> Prefs.adminPath = v
             }
         }
         // Zones are drawn in the displayed frame's coordinates. A change that

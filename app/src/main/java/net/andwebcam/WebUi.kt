@@ -235,6 +235,10 @@ object WebUi {
       <div class="row">
         <label class="check"><input id="auto" type="checkbox"> Start streaming when the service starts</label>
       </div>
+      <div class="row">
+        <label>Admin page path (blank puts admin at /)</label>
+        <input id="s_adminpath" type="text" spellcheck="false" placeholder="blank for /">
+      </div>
 
       <details class="certbox">
         <summary>Public certificate</summary>
@@ -783,6 +787,7 @@ function refresh() {
     el('s_torch').disabled = !s.torchAvailable;
     if (document.activeElement !== el('s_anon')) { el('s_anon').checked = !!s.anonView; }
     if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
+    if (document.activeElement !== el('s_adminpath')) { el('s_adminpath').value = s.adminPath || ''; }
     updateCert(s.cert || {});
   }).catch(function() {
     el('i_state').textContent = 'unreachable';
@@ -834,6 +839,7 @@ el('s_orient').onchange = function() { setSetting('orientation', this.value); };
 el('s_torch').onchange = function() { setSetting('torch', this.checked); };
 el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
+el('s_adminpath').onchange = function() { setSetting('adminPath', this.value); };
 function certToggle(key, value) {
   var o = {}; o[key] = value;
   post('/api/cert/save', o).then(function() { setTimeout(refresh, 300); });
@@ -1795,6 +1801,159 @@ scaleMode = scalePref() || 'fit';
 applyScale();
 refresh();
 setInterval(refresh, 2000);
+</script>
+</body>
+</html>
+"""
+
+    /** The view at "/": just the picture and a hideaway control bar. */
+    val PUBLIC_PAGE: String = """
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>andWebCam</title>
+<style>
+ :root { color-scheme: dark }
+ html, body { margin:0; height:100%; background:#000; color:#ddd; overflow:hidden; font-family:system-ui,-apple-system,sans-serif }
+ #video { position:fixed; inset:0; display:flex; align-items:center; justify-content:center; overflow:hidden; background:#000; touch-action:none }
+ #vid, #freeze { display:block; width:100%; height:auto; max-height:100vh; object-fit:contain; user-select:none; -webkit-user-drag:none }
+ #video.fitw #vid, #video.fitw #freeze { max-height:none }
+ #video.fith #vid, #video.fith #freeze { width:auto; height:100vh; max-width:none }
+ #video.oneone #vid, #video.oneone #freeze { width:auto; height:auto; max-width:none; max-height:none }
+ #freeze { display:none }
+ #msg { position:absolute; inset:0; z-index:2; display:none; align-items:center; justify-content:center; background:#000; color:#bbb; font-size:16px; text-align:center; padding:20px }
+ #bar { position:absolute; left:0; right:0; bottom:0; z-index:3; display:flex; align-items:center; justify-content:center; gap:10px; padding:26px 12px 14px; background:linear-gradient(to top,rgba(0,0,0,.8),rgba(0,0,0,0)); opacity:0; transition:opacity .25s; pointer-events:none }
+ #bar.show { opacity:1; pointer-events:auto }
+ #bar button { background:rgba(20,20,20,.85); color:#ddd; border:1px solid #444; border-radius:6px; padding:7px 10px; font-size:12px; cursor:pointer }
+ #bar button:hover { background:#333 }
+ #bar button.on { background:#2b6cb0; border-color:#2b6cb0; color:#fff }
+ #bar svg { width:15px; height:15px; display:block; fill:currentColor }
+ #snap svg { fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
+ .seg { display:flex }
+ .seg button { border-radius:0; border-left:0 }
+ .seg button:first-child { border-radius:6px 0 0 6px; border-left:1px solid #444 }
+ .seg button:last-child { border-radius:0 6px 6px 0 }
+</style>
+</head>
+<body>
+<div id="video">
+  <img id="vid" alt="">
+  <canvas id="freeze"></canvas>
+  <div id="msg"></div>
+  <div id="bar">
+    <button id="pause" title="Pause or resume the stream" aria-label="Pause or resume"></button>
+    <button id="snap" title="Save a snapshot" aria-label="Save a snapshot"><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
+    <span class="seg" id="scales">
+      <button data-scale="fit" title="Fit the whole frame">Fit</button>
+      <button data-scale="w" title="Fit width">W</button>
+      <button data-scale="h" title="Fit height">H</button>
+      <button data-scale="1" title="Actual size">1:1</button>
+    </span>
+  </div>
+</div>
+<script>
+(function() {
+  var box = document.getElementById('video');
+  var img = document.getElementById('vid');
+  var freeze = document.getElementById('freeze');
+  var msg = document.getElementById('msg');
+  var bar = document.getElementById('bar');
+  var pauseBtn = document.getElementById('pause');
+  var PLAY = '<svg viewBox="0 0 16 16"><path d="M5 3 13 8 5 13z"/></svg>';
+  var PAUSE = '<svg viewBox="0 0 16 16"><path d="M4 3h3v10H4zm5 0h3v10H9z"/></svg>';
+  var paused = false;
+  var want = false;
+  var hideTimer = null;
+  var scaleMode = 'fit';
+  try { scaleMode = localStorage.getItem('awcPubScale') || 'fit'; } catch (e) {}
+
+  function message(t) {
+    if (t) { msg.textContent = t; msg.style.display = 'flex'; }
+    else { msg.style.display = 'none'; }
+  }
+  function icon() {
+    pauseBtn.innerHTML = paused ? PLAY : PAUSE;
+    pauseBtn.title = paused ? 'Resume' : 'Pause';
+  }
+  function start() {
+    if (!want || paused) { return; }
+    message('');
+    freeze.style.display = 'none';
+    img.style.display = '';
+    img.src = '/video?t=' + Date.now();
+  }
+  function stop(text) {
+    freeze.style.display = 'none';
+    img.removeAttribute('src');
+    img.style.display = 'none';
+    message(text);
+  }
+  function applyScale() {
+    box.classList.remove('fitw', 'fith', 'oneone');
+    if (scaleMode === 'w') { box.classList.add('fitw'); }
+    if (scaleMode === 'h') { box.classList.add('fith'); }
+    if (scaleMode === '1') { box.classList.add('oneone'); }
+    var b = box.querySelectorAll('#scales button');
+    for (var i = 0; i < b.length; i++) { b[i].classList.toggle('on', b[i].getAttribute('data-scale') === scaleMode); }
+  }
+  function showBar() {
+    bar.classList.add('show');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(function() { bar.classList.remove('show'); }, 3000);
+  }
+  box.addEventListener('mousemove', showBar);
+  box.addEventListener('pointerdown', showBar);
+  box.addEventListener('touchstart', showBar, { passive: true });
+  document.addEventListener('keydown', function(e) {
+    if (e.key === ' ' && want) { e.preventDefault(); pauseBtn.click(); showBar(); }
+  });
+  pauseBtn.onclick = function() {
+    paused = !paused;
+    icon();
+    if (paused) {
+      // Multipart JPEG has no pause: keep the frame that is on screen. The
+      // stream is same-origin, so it can be copied into a canvas safely.
+      if (img.naturalWidth > 0) {
+        try {
+          freeze.width = img.naturalWidth;
+          freeze.height = img.naturalHeight;
+          freeze.getContext('2d').drawImage(img, 0, 0);
+          freeze.style.display = 'block';
+        } catch (e) { freeze.style.display = 'none'; }
+      }
+      img.removeAttribute('src');
+      img.style.display = 'none';
+      message('');
+    } else {
+      start();
+    }
+    showBar();
+  };
+  document.getElementById('snap').onclick = function() { window.location = '/snapshot'; };
+  var sb = box.querySelectorAll('#scales button');
+  for (var j = 0; j < sb.length; j++) {
+    sb[j].onclick = function() {
+      scaleMode = this.getAttribute('data-scale');
+      try { localStorage.setItem('awcPubScale', scaleMode); } catch (e) {}
+      applyScale();
+      showBar();
+    };
+  }
+  img.onerror = function() { if (want && !paused) { setTimeout(start, 1000); } };
+  function refresh() {
+    fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
+      if (s.locked) { want = false; stop('Anonymous access is disabled'); return; }
+      if (!s.streaming) { want = false; stop('Streaming is stopped'); return; }
+      if (!want) { want = true; start(); }
+    }).catch(function() {});
+  }
+  icon();
+  applyScale();
+  refresh();
+  setInterval(refresh, 4000);
+})();
 </script>
 </body>
 </html>

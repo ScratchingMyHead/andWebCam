@@ -365,6 +365,10 @@ class HttpServer(
                     m["auth"] = who.method
                     m["host"] = "${Prefs.serviceName}.local"
                     m["url"] = State.url
+                    if (role == Role.ADMIN) {
+                        m["adminUrl"] = Prefs.adminUrl
+                        m["adminPath"] = Prefs.adminPath
+                    }
                     respond(output, 200, "application/json", jsonBytes(m))
                 }
             }
@@ -625,6 +629,13 @@ class HttpServer(
             }
 
             method == "GET" && path == "/" -> {
+                // A blank admin path puts the control page back at "/";
+                // otherwise "/" is the bare webcam view.
+                val page = if (Prefs.adminPath.isEmpty()) PAGE else PUBLIC_PAGE
+                respond(output, 200, "text/html; charset=utf-8", page.toByteArray())
+            }
+
+            method == "GET" && path == Prefs.adminUrl && path != "/" -> {
                 // Served without a session: this is the login form's shell.
                 // Everything it can show comes from the gated API.
                 respond(output, 200, "text/html; charset=utf-8", PAGE.toByteArray())
@@ -1114,5 +1125,6 @@ class HttpServer(
 
     companion object {
         val PAGE: String get() = WebUi.PAGE
+        val PUBLIC_PAGE: String get() = WebUi.PUBLIC_PAGE
     }
 }
