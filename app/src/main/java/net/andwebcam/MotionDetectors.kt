@@ -249,6 +249,14 @@ class CvDetector : FrameDetector {
         val cleaned = org.opencv.core.Mat()
         val contours = ArrayList<org.opencv.core.MatOfPoint>()
         val hierarchy = org.opencv.core.Mat()
+        // A 2x2 opening preserves thin, distant silhouettes that a 3x3 one
+        // erases completely; dilate back with 3x3 to rejoin the pieces.
+        val openKernel = org.opencv.imgproc.Imgproc.getStructuringElement(
+            org.opencv.imgproc.Imgproc.MORPH_ELLIPSE, org.opencv.core.Size(2.0, 2.0)
+        )
+        val dilateKernel = org.opencv.imgproc.Imgproc.getStructuringElement(
+            org.opencv.imgproc.Imgproc.MORPH_ELLIPSE, org.opencv.core.Size(3.0, 3.0)
+        )
         try {
             val bmp = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap
             else bitmap.copy(Bitmap.Config.ARGB_8888, false)
@@ -278,13 +286,10 @@ class CvDetector : FrameDetector {
                 return Analysis(total = n, changed = changed, skip = true)
             }
 
-            val kernel = org.opencv.imgproc.Imgproc.getStructuringElement(
-                org.opencv.imgproc.Imgproc.MORPH_ELLIPSE, org.opencv.core.Size(3.0, 3.0)
-            )
             org.opencv.imgproc.Imgproc.morphologyEx(
-                mask, opened, org.opencv.imgproc.Imgproc.MORPH_OPEN, kernel
+                mask, opened, org.opencv.imgproc.Imgproc.MORPH_OPEN, openKernel
             )
-            org.opencv.imgproc.Imgproc.dilate(opened, cleaned, kernel)
+            org.opencv.imgproc.Imgproc.dilate(opened, cleaned, dilateKernel)
             contours.clear()
             org.opencv.imgproc.Imgproc.findContours(
                 cleaned, contours, hierarchy,
@@ -296,10 +301,10 @@ class CvDetector : FrameDetector {
             // At the default sensitivity a distant car is only a few dozen
             // pixels at this size; an over-large minimum loses those entirely.
             // The floor has to be low enough for a person across the road:
-            // at full sensitivity that is only ~14 px in a 320-wide frame.
+            // ~15 px at sensitivity 92, ~6 px at 100, in a 320-wide frame.
             // Tiny blobs still need two ticks to become a visible box, so
             // the extra contours cost accuracy, not a shower of specks.
-            val minArea = n * (0.00025 + (100 - sensitivity) * 0.000035)
+            val minArea = n * (0.0001 + (100 - sensitivity) * 0.00002)
             val maxArea = n * 0.12
             // The slider is logarithmic between the smallest detectable blob
             // and 12% of the frame. A linear area scale squeezed everything
@@ -344,6 +349,7 @@ class CvDetector : FrameDetector {
         } finally {
             rgba.release(); gmat.release(); mask.release()
             opened.release(); cleaned.release(); hierarchy.release()
+            openKernel.release(); dilateKernel.release()
             contours.forEach { it.release() }
         }
     }
