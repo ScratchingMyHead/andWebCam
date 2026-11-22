@@ -207,7 +207,7 @@ object Prefs {
 
     /**
      * Outbound public feed. The URL is the public page path, e.g.
-     * "https://offloop.net/cam/cam2"; blank disables the feed. The token
+     * "https://cam2.example.com/"; blank disables the feed. The token
      * authenticates this phone to the relay; the viewing password protects
      * the public page, and blank means no password.
      */

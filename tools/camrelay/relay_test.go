@@ -42,7 +42,7 @@ func TestProxyRoundTrip(t *testing.T) {
 	out := make(chan result, 1)
 	go func() {
 		req, _ := http.NewRequest("GET", srv.URL+"/api/status", nil)
-		req.Host = "cam2.offloop.net"
+		req.Host = "cam2.example.com"
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
 			out <- result{err: err}

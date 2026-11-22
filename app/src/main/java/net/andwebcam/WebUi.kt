@@ -244,14 +244,14 @@ object WebUi {
       </div>
       <div class="row">
         <label>Admin page path (blank puts admin at /)</label>
-        <input id="s_adminpath" type="text" spellcheck="false" placeholder="blank for /">
+        <input id="s_adminpath" type="text" spellcheck="false" placeholder="e.g. admin for cam2.local/admin">
       </div>
 
       <details class="certbox">
         <summary>Public proxy</summary>
         <div class="row">
           <label>Public URL (blank disables)</label>
-          <input id="s_puburl" type="text" spellcheck="false" placeholder="https://cam2.offloop.net/">
+          <input id="s_puburl" type="text" spellcheck="false" placeholder="https://cam2.example.com/">
         </div>
         <div class="row">
           <label>Proxy token</label>
@@ -829,6 +829,8 @@ function refresh() {
     if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
     if (document.activeElement !== el('s_mdns')) { el('s_mdns').checked = s.mdnsEnabled !== false; }
     if (document.activeElement !== el('s_adminpath')) { el('s_adminpath').value = s.adminPath || ''; }
+    var host = s.host || ((s.serviceName || 'andwebcam') + '.local');
+    el('s_adminpath').placeholder = 'e.g. admin for ' + host + '/admin';
     var pf = s.publicFeed || {};
     if (document.activeElement !== el('s_puburl')) { el('s_puburl').value = pf.url || ''; }
     if (document.activeElement !== el('s_pubtoken')) { el('s_pubtoken').value = pf.token || ''; }

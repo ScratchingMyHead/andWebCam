@@ -74,8 +74,8 @@ class PublicFeed {
     @Volatile private var connected = false
     @Volatile private var fatal = false
     @Volatile private var id = ""
-    @Volatile private var origin = ""     // https://cam2.offloop.net
-    @Volatile private var wsOrigin = ""   // wss://cam2.offloop.net
+    @Volatile private var origin = ""     // https://cam2.example.com
+    @Volatile private var wsOrigin = ""   // wss://cam2.example.com
     @Volatile private var token = ""
     @Volatile private var password = ""
     @Volatile private var lastError = ""
@@ -128,8 +128,11 @@ class PublicFeed {
         if (u.scheme != "https" && u.scheme != "http") return null
         val host = u.host ?: return null
         val port = if (u.port > 0) ":${u.port}" else ""
-        val name = if (host.endsWith(".offloop.net")) {
-            host.removeSuffix(".offloop.net")
+        // A camera subdomain such as cam2.example.com gives the id directly.
+        // On a plain hostname, fall back to a /cam/<id> path.
+        val dottedHost = host.count { it == '.' } >= 2 && !host.matches(Regex("^[0-9.]+$"))
+        val name = if (dottedHost) {
+            host.substringBefore('.')
         } else {
             val parts = u.path.trim('/').split('/').filter { it.isNotEmpty() }
             if (parts.size < 2 || parts[parts.size - 2] != "cam") return null

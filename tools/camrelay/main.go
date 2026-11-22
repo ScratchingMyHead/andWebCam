@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"regexp"
@@ -134,16 +135,25 @@ func sendJSON(cam *camera, v any) error {
 	return cam.conn.WriteJSON(v)
 }
 
-func (r *relay) cameraFor(req *http.Request) (*camera, bool) {
-	host := req.Host
+// A camera subdomain such as cam2.example.com identifies the camera directly.
+// On a plain hostname the caller can use ?cam=cam2 instead.
+func cameraIDFromHost(host string) string {
 	if i := strings.LastIndex(host, ":"); i >= 0 {
 		host = host[:i]
 	}
-	id := ""
-	if strings.HasSuffix(host, ".offloop.net") {
-		id = strings.TrimSuffix(host, ".offloop.net")
-	} else {
-		// Handy for local testing: /cam/?cam=cam2
+	if net.ParseIP(host) != nil {
+		return ""
+	}
+	parts := strings.Split(host, ".")
+	if len(parts) >= 3 {
+		return parts[0]
+	}
+	return ""
+}
+
+func (r *relay) cameraFor(req *http.Request) (*camera, bool) {
+	id := cameraIDFromHost(req.Host)
+	if id == "" {
 		id = req.URL.Query().Get("cam")
 	}
 	if !idRE.MatchString(id) {
@@ -401,14 +411,8 @@ func (r *relay) handleRequestSocket(w http.ResponseWriter, req *http.Request, id
 		http.NotFound(w, req)
 		return
 	}
-	host := req.Host
-	if i := strings.LastIndex(host, ":"); i >= 0 {
-		host = host[:i]
-	}
-	camID := ""
-	if strings.HasSuffix(host, ".offloop.net") {
-		camID = strings.TrimSuffix(host, ".offloop.net")
-	} else {
+	camID := cameraIDFromHost(req.Host)
+	if camID == "" {
 		camID = req.URL.Query().Get("cam")
 	}
 	r.mu.Lock()

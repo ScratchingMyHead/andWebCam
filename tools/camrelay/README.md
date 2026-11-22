@@ -41,18 +41,18 @@ before proxying anything for that camera.
 
 ## Apache
 
-A wildcard DNS record such as `*.offloop.net` must point at the server, and the
+A wildcard DNS record such as `*.yourhost.com` must point at the server, and the
 TLS certificate must cover it. One wildcard vhost is enough for every camera:
 
 ```
 <VirtualHost *:443>
-    ServerName cam.offloop.net
-    ServerAlias *.offloop.net
+    ServerName cam.yourhost.com
+    ServerAlias *.yourhost.com
 
     SSLEngine on
     Include /etc/letsencrypt/options-ssl-apache.conf
-    SSLCertificateFile /etc/letsencrypt/live/offloop-wildcard/fullchain.pem
-    SSLCertificateKeyFile /etc/letsencrypt/live/offloop-wildcard/privkey.pem
+    SSLCertificateFile /etc/letsencrypt/live/yourhost-wildcard/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/yourhost-wildcard/privkey.pem
 
     ProxyPreserveHost On
     ProxyPass        /req/ ws://127.0.0.1:18080/req/
@@ -63,8 +63,8 @@ TLS certificate must cover it. One wildcard vhost is enough for every camera:
 </VirtualHost>
 ```
 
-`ProxyPreserveHost On` is essential: `cam2.offloop.net` becomes camera ID
-`cam2`. Exact vhosts (`offloop.net`, `www`, `mail`) take precedence over the
+`ProxyPreserveHost On` is essential: `cam2.yourhost.com` becomes camera ID
+`cam2`. Exact vhosts (`yourhost.com`, `www`, `mail`) take precedence over the
 wildcard, so the existing site is unaffected.
 
 The daemon refuses to listen on anything except loopback.

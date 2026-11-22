@@ -58,7 +58,7 @@ The **Public proxy** section has three further settings:
 
 | Setting | Default | What it does |
 | --- | --- | --- |
-| Public URL | Empty | The public address of this camera, e.g. `https://cam2.offloop.net/`. Blank disables the proxy. |
+| Public URL | Empty | The public address of this camera, e.g. `https://cam2.yourhost.com/`. Blank disables the proxy. |
 | Proxy token | Generated on first run | Shared secret sent to the relay. Copy it into the relay's token file; the relay rejects a different token. |
 | Viewing password | Empty | If set, the relay asks for HTTP Basic auth before serving this camera. Blank means no relay-level password; the app's own admin password still applies. |
 
@@ -71,7 +71,7 @@ relay daemon on loopback. The relay asks the phone to replay each request
 against the phone's own local web server and streams the response back. The
 whole UI is available remotely, not just the video.
 
-Each camera has its own hostname: `cam2.offloop.net` maps to camera ID `cam2`,
+Each camera has its own hostname: `cam2.yourhost.com` maps to camera ID `cam2`,
 and a single wildcard Apache vhost serves all cameras. When the phone is
 offline the relay serves a short "Camera offline" page with a five-second
 refresh. While the proxy is enabled the camera stays open; no data is sent
