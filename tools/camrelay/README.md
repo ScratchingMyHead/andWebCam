@@ -39,10 +39,13 @@ settings. Viewing passwords are sent by the phone at registration and are
 stored only in memory; if one is set, the daemon asks for HTTP Basic auth
 before proxying anything for that camera.
 
-## Apache
+## Reverse proxy
 
 A wildcard DNS record such as `*.yourhost.com` must point at the server, and the
-TLS certificate must cover it. One wildcard vhost is enough for every camera:
+TLS certificate must cover it. A single wildcard server block serves every
+camera. Both Apache and nginx work; the daemon itself is unchanged.
+
+### Apache
 
 ```
 <VirtualHost *:443>
@@ -68,6 +71,41 @@ TLS certificate must cover it. One wildcard vhost is enough for every camera:
 wildcard, so the existing site is unaffected.
 
 The daemon refuses to listen on anything except loopback.
+
+### nginx
+
+The same three requirements apply: preserve the `Host` header so the relay can
+derive the camera ID, forward WebSocket upgrades on `/ws/` and `/req/`, and
+stream responses without buffering so MJPEG frames arrive as they are produced.
+
+```
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+server {
+    listen 443 ssl;
+    server_name cam.yourhost.com *.yourhost.com;
+    ssl_certificate     /etc/letsencrypt/live/yourhost-wildcard/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourhost-wildcard/privkey.pem;
+
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header Upgrade $http_upgrade;
+    proxy_set_header Connection $connection_upgrade;
+    proxy_buffering off;
+    proxy_read_timeout 3600;
+    proxy_send_timeout 3600;
+
+    location /req/ { proxy_pass http://127.0.0.1:18080/req/; }
+    location /ws/  { proxy_pass http://127.0.0.1:18080/ws/;  }
+    location /     { proxy_pass http://127.0.0.1:18080/;     }
+}
+```
+
+This configuration was validated locally against the real relay: Host routing,
+WebSocket upgrades on both paths, an HTTP request/response round trip, and
+MJPEG frame streaming all worked. It was not deployed as a public nginx host.
 
 ## Install as a service
 

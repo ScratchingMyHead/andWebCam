@@ -72,7 +72,9 @@ preferable if that option is available.
 Apache on the public host terminates TLS for a wildcard subdomain and forwards
 requests to a small relay daemon on loopback. The relay asks the phone to replay
 each request against the phone's own local web server and streams the response
-back. The whole UI is available remotely, not just the video.
+back. The whole UI is available remotely, not just the video. Apache is used
+in the example setup, but nginx works too with the equivalent proxy rules in
+the relay's README.
 
 Each camera has its own hostname: `cam2.yourhost.com` maps to camera ID `cam2`,
 and a single wildcard Apache vhost serves all cameras. When the phone is
