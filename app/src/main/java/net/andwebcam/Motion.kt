@@ -331,6 +331,7 @@ class Motion {
         active = false
         lastOverall = 0
         tracks.clear()
+        nextTrackId = 1
         boxes = emptyList()
         synchronized(zones) { zones.forEach { it.level = 0 } }
         synchronized(history) { history.clear() }
@@ -384,6 +385,7 @@ class Motion {
 
         if (result.skip) {
             tracks.clear()
+            nextTrackId = 1
             boxes = emptyList()
             synchronized(zones) { zones.forEach { it.level = 0 } }
             active = false
@@ -432,6 +434,10 @@ class Motion {
             now - it.seen > if (it.hits >= MIN_HITS) TRACK_MS else UNCONFIRMED_MS
         }
         while (tracks.size > 16) tracks.removeAt(0)
+        // Ids are only meant to tell apart the boxes on screen now, so start
+        // again at 1 once the last object has gone. Never reset while tracks
+        // remain, or a live one could collide with a freshly issued id.
+        if (tracks.isEmpty()) nextTrackId = 1
         // A reasonably sized object is worth drawing on the first sighting;
         // small specks still need two ticks to prove they are not noise.
         val visible = tracks.filter { it.hits >= MIN_HITS || it.level >= FIRST_SIGHT_LEVEL }
