@@ -38,7 +38,7 @@ import java.util.concurrent.TimeUnit
  * several names while each certificate gets its own key pair.
  */
 object Acme {
-    private const val TAG = "andWebCam-acme"
+    private const val TAG = "andWebCam"
     private const val PROD = "https://acme-v02.api.letsencrypt.org/directory"
     private const val STAGING = "https://acme-staging-v02.api.letsencrypt.org/directory"
     private const val DUCK = "https://www.duckdns.org/update"
@@ -46,6 +46,8 @@ object Acme {
     @Volatile private var busy = false
     @Volatile private var lastError: String? = null
     @Volatile private var nonce: String? = null
+    /** The last address successfully pushed to DuckDNS; avoids churn on reconnect. */
+    @Volatile private var lastPublished: String? = null
     private var scheduler: ScheduledExecutorService? = null
     var onChanged: (() -> Unit)? = null
 
@@ -86,7 +88,24 @@ object Acme {
         scheduler = Executors.newSingleThreadScheduledExecutor { r ->
             Thread(r, "andwebcam-acme").apply { isDaemon = true }
         }
-        scheduler!!.scheduleWithFixedDelay({ check(ctx) }, 5, 6, TimeUnit.HOURS)
+        scheduler!!.scheduleWithFixedDelay({ check(ctx) }, 5, 30, TimeUnit.MINUTES)
+    }
+
+    /**
+     * The phone's address changed, or connectivity came back after a drop.
+     * In wan mode this is what makes us look up the public address straight
+     * away rather than waiting for the next half-hour tick. A drop to "no
+     * address" is handled by [publishIp] simply doing nothing; if the old
+     * address comes back, the cached value stops us republishing it.
+     */
+    fun onNetworkChanged(ctx: Context) {
+        Thread {
+            try {
+                publishIp(ctx)
+            } catch (e: Exception) {
+                Log.w(TAG, "DDNS update after a network change failed: ${e.message}")
+            }
+        }.apply { isDaemon = true }.start()
     }
 
     fun stop() {
@@ -152,7 +171,7 @@ object Acme {
         if (method == "dns-01" && Prefs.certToken.isEmpty()) {
             throw Exception("Enter the DuckDNS token for DNS validation")
         }
-        publishIp(ctx)
+        publishIp(ctx, force = true)
 
         val dirUrl = if (Prefs.certStaging) STAGING else PROD
         val d = get(dirUrl)
@@ -274,7 +293,7 @@ object Acme {
 
     // ---- DuckDNS ----------------------------------------------------------
 
-    private fun publishIp(ctx: Context) {
+    private fun publishIp(ctx: Context, force: Boolean = false) {
         val mode = Prefs.certPublish
         val domain = Prefs.certDomain
         val token = Prefs.certToken
@@ -286,7 +305,10 @@ object Acme {
             if (r.code in 200..299) r.body.trim() else ""
         }
         if (ip.isNullOrEmpty() || !ip.matches(Regex("[0-9.]+"))) return
+        if (!force && ip == lastPublished) return
         duckCall(domain, token, "&ip=$ip")
+        lastPublished = ip
+        Log.i(TAG, "published $ip to DuckDNS")
     }
 
     private fun duckCall(domain: String, token: String, extra: String) {

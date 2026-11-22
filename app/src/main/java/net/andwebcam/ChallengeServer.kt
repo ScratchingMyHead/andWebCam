@@ -19,7 +19,7 @@ import java.util.concurrent.Executors
  * need port 443 and a different handshake entirely; http-01 is enough.
  */
 object ChallengeServer {
-    private const val TAG = "andWebCam-acme"
+    private const val TAG = "andWebCam"
     private val tokens = ConcurrentHashMap<String, String>()
     private val pool = Executors.newCachedThreadPool { r ->
         Thread(r, "andwebcam-acme-http").apply { isDaemon = true }

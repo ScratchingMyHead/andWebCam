@@ -452,8 +452,12 @@ class CamService : Service(), HttpServer.Host {
     private fun refreshNetwork() {
         if (!started) return
         val ip = currentIp()
-        if (ip != State.ip) Log.i(TAG, "address is now ${ip ?: "none"}")
+        val changed = ip != State.ip
+        if (changed) Log.i(TAG, "address is now ${ip ?: "none"}")
         State.ip = ip
+        // A new address on this hotspot almost certainly means a new public
+        // one too: re-check DDNS now instead of waiting for the next tick.
+        if (changed) Acme.onNetworkChanged(this)
         // Rebuild rather than patch up. A socket whose multicast membership died
         // with the interface stays open and simply never receives again - the
         // threads look perfectly healthy - so there is nothing to detect and
