@@ -213,6 +213,15 @@ object WebUi {
         <input id="s_zoom" type="range" min="1" max="4" step="0.1">
       </div>
       <div class="row">
+        <label>Streaming scale</label>
+        <select id="s_scale">
+          <option value="25">25%</option>
+          <option value="50">50%</option>
+          <option value="75">75%</option>
+          <option value="100">100%</option>
+        </select>
+      </div>
+      <div class="row">
         <label>Orientation</label>
         <select id="s_orient">
           <option value="0">Landscape</option>
@@ -289,15 +298,6 @@ object WebUi {
         </div>
         <div class="row">
           <label class="check"><input id="auto" type="checkbox"> Start streaming when the service starts</label>
-        </div>
-        <div class="row">
-          <label>Streaming scale</label>
-          <select id="s_scale">
-            <option value="25">25%</option>
-            <option value="50">50%</option>
-            <option value="75">75%</option>
-            <option value="100">100%</option>
-          </select>
         </div>
         <div class="row"><label class="check"><input id="s_mdns" type="checkbox"> Advertise on the LAN (mDNS)</label></div>
         <button id="apply">Apply service settings</button>
