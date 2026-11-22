@@ -271,7 +271,8 @@ class Motion {
                 val parts = spec.split(';')
                 aspect = parts[0].toDoubleOrNull() ?: 0.0
                 for (z in parts.drop(1)) {
-                    val s = z.substringBefore(':').toIntOrNull()?.coerceIn(0, 100) ?: continue
+                    // Zero would keep a zone firing on an empty frame.
+                    val s = z.substringBefore(':').toIntOrNull()?.coerceIn(1, 100) ?: continue
                     // New form is "min:max:x,y,..."; older zones have no max
                     // and keep their old meaning of "anything above min".
                     val rest = z.substringAfter(':')

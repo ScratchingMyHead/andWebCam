@@ -1533,7 +1533,7 @@ function buildZoneList(d) {  var list = el('zoneList');
   zones.forEach(function(z) {
     var r = list.querySelector('.zrange[data-id="' + z.id + '"]');
     if (!r) { return; }
-    if (!r._dragging) { r._lo = z.sensitivity; r._hi = z.max == null ? 100 : z.max; }
+    if (!r._dragging && !r._pending) { r._lo = z.sensitivity; r._hi = z.max == null ? 100 : z.max; }
     // The phone gives the highest level since the previous poll, so a spike
     // between polls still reaches us. Show it immediately, then settle back
     // to the live level quickly, keeping the meter lively.
@@ -1558,7 +1558,7 @@ function zoneRange(z) {
   var r = document.createElement('div');
   r.className = 'zrange';
   r.dataset.id = z.id;
-  r._lo = z.sensitivity || 0;
+  r._lo = Math.max(1, z.sensitivity || 1);
   r._hi = z.max == null ? 100 : z.max;
   r._level = 0;
   r.innerHTML = '<div class="ztrack"></div><div class="zfill"></div>' +
@@ -1586,7 +1586,7 @@ function rangePos(r, e) {
 
 function paintRange(r, level) {
   r._level = level || 0;
-  var firing = r._level >= r._lo && r._level <= r._hi;
+  var firing = r._level >= Math.max(1, r._lo) && r._level <= r._hi;
   var fill = r.querySelector('.zfill');
   fill.style.width = Math.max(r._level, 2) + '%';
   fill.style.background = firing ? '#e53935' : '#2b6cb0';
@@ -1604,17 +1604,17 @@ document.addEventListener('pointermove', function(e) {
   if (activeRange.which === 'lo') {
     if (v >= r._hi) {
       r._hi = Math.min(100, v + RANGE_GAP);
-      r._lo = Math.min(v, r._hi - RANGE_GAP);
+      r._lo = Math.max(1, Math.min(v, r._hi - RANGE_GAP));
     } else {
-      r._lo = Math.max(0, Math.min(v, r._hi - RANGE_GAP));
+      r._lo = Math.max(1, Math.min(v, r._hi - RANGE_GAP));
     }
   } else if (r.querySelector('.zhi').classList.contains('hidden')) {
     // Grid mode has no upper bound: the dark handle stays at the end.
     r._hi = 100;
-    r._lo = Math.max(0, Math.min(v, r._hi - RANGE_GAP));
+    r._lo = Math.max(1, Math.min(v, r._hi - RANGE_GAP));
   } else {
     if (v <= r._lo) {
-      r._lo = Math.max(0, v - RANGE_GAP);
+      r._lo = Math.max(1, v - RANGE_GAP);
       r._hi = Math.max(v, r._lo + RANGE_GAP);
     } else {
       r._hi = Math.min(100, Math.max(v, r._lo + RANGE_GAP));
@@ -1637,7 +1637,7 @@ function zonesPayload(list) {
   var d = motionData || {};
   var parts = [(d.aspect || 1.7778).toFixed(4)];
   list.forEach(function(z) {
-    parts.push((z.sensitivity || 0) + ':' + (z.max == null ? 100 : z.max) + ':' + z.points.map(function(p) {
+    parts.push(Math.max(1, z.sensitivity || 1) + ':' + (z.max == null ? 100 : z.max) + ':' + z.points.map(function(p) {
       return Number(p[0]).toFixed(4) + ',' + Number(p[1]).toFixed(4);
     }).join(','));
   });
@@ -1649,7 +1649,16 @@ function zonesPayload(list) {
 var saveZonesTimer = null;
 function saveZones(list) {
   clearTimeout(saveZonesTimer);
+  // Keep the handles at the dragged positions until the phone acknowledges
+  // the write; otherwise a poll in between snaps them back to the old values.
+  var ranges = document.querySelectorAll('.zrange');
+  for (var i = 0; i < ranges.length; i++) { ranges[i]._pending = true; }
   saveZonesTimer = setTimeout(function() { sendZones(list); }, 120);
+}
+
+function clearZonePending() {
+  var ranges = document.querySelectorAll('.zrange');
+  for (var i = 0; i < ranges.length; i++) { ranges[i]._pending = false; }
 }
 
 function sendZones(list) {
@@ -1660,7 +1669,7 @@ function sendZones(list) {
   var payload = list || (d.zones || []).map(function(z) {
     var r = document.querySelector('.zrange[data-id="' + z.id + '"]');
     return {
-      sensitivity: r ? Math.round(r._lo) : z.sensitivity,
+      sensitivity: r ? Math.max(1, Math.round(r._lo)) : Math.max(1, z.sensitivity || 1),
       max: r ? Math.round(r._hi) : (z.max == null ? 100 : z.max),
       points: z.points,
     };
@@ -1670,9 +1679,10 @@ function sendZones(list) {
     headers: { 'Content-Type': 'text/plain' },
     body: zonesPayload(payload),
   }).then(function(r) { return r.json(); }).then(function(res) {
+    clearZonePending();
     if (res.ok === false) { motionMsg(res.error || 'Could not save the zones'); }
     motionTick();
-  }).catch(function() { motionMsg('No answer from the phone.'); });
+  }).catch(function() { clearZonePending(); motionMsg('No answer from the phone.'); });
 }
 
 function updateDrawUi() {
