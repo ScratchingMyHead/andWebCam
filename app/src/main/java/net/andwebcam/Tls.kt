@@ -99,32 +99,35 @@ object Tls {
     }
 
     /**
-     * One listener, two identities. Browsers send the name they want in SNI;
-     * pick the matching certificate so cam2.local keeps its own trusted root
-     * while the public DNS name gets the Let's Encrypt chain. Clients that
-     * send no SNI (or an unknown name) get the self-signed identity.
+     * A key manager that looks up the current public identity at handshake
+     * time, rather than freezing it when the listener is built. Renewals and
+     * on/off switches therefore take effect without restarting the server -
+     * which would also throw away every viewer's login session.
+     *
+     * [preferPublic] makes the extra listener always use the LE certificate
+     * when one exists; on the main port the choice comes from SNI instead.
      */
-    fun dualSslContext(ctx: Context): SSLContext {
+    private fun dynamicManager(ctx: Context, preferPublic: Boolean): X509ExtendedKeyManager {
         val own = identity(ctx)
-        val entries = LinkedHashMap<String, Pair<PrivateKey, Array<X509Certificate>>>()
-        entries["server"] = Pair(own.key, arrayOf(own.cert, own.ca))
-        publicIdentity(ctx)?.let { entries["public"] = Pair(it.key, it.chain) }
+        fun publicEntry(): Pair<PrivateKey, Array<X509Certificate>>? =
+            publicIdentity(ctx)?.let { Pair(it.key, it.chain) }
 
-        val manager = object : X509ExtendedKeyManager() {
-            private fun pick(session: SSLSession?): String {
+        fun pick(session: SSLSession?): String {
+            if (publicEntry() != null) {
+                if (preferPublic) return "public"
                 val wanted = Prefs.certDomain
-                if (wanted.isNotEmpty() && entries.containsKey("public")) {
-                    val names = (session as? ExtendedSSLSession)?.requestedServerNames
-                    if (names != null) {
-                        for (n in names) {
-                            val host = String(n.encoded, Charsets.US_ASCII).trimEnd('\u0000')
-                            if (host.equals(wanted, ignoreCase = true)) return "public"
-                        }
+                val names = (session as? ExtendedSSLSession)?.requestedServerNames
+                if (wanted.isNotEmpty() && names != null) {
+                    for (n in names) {
+                        val host = String(n.encoded, Charsets.US_ASCII).trimEnd('\u0000')
+                        if (host.equals(wanted, ignoreCase = true)) return "public"
                     }
                 }
-                return "server"
             }
+            return "server"
+        }
 
+        return object : X509ExtendedKeyManager() {
             override fun chooseServerAlias(
                 keyType: String?, issuers: Array<Principal>?, socket: Socket?
             ): String = pick((socket as? SSLSocket)?.handshakeSession)
@@ -134,11 +137,19 @@ object Tls {
             ): String = pick(engine?.handshakeSession)
 
             override fun getServerAliases(keyType: String?, issuers: Array<Principal>?): Array<String> =
-                entries.keys.toTypedArray()
+                if (publicEntry() != null) arrayOf("server", "public") else arrayOf("server")
 
-            override fun getCertificateChain(alias: String?): Array<X509Certificate>? = entries[alias]?.second
+            override fun getCertificateChain(alias: String?): Array<X509Certificate>? = when (alias) {
+                "public" -> publicEntry()?.second
+                "server" -> arrayOf(own.cert, own.ca)
+                else -> null
+            }
 
-            override fun getPrivateKey(alias: String?): PrivateKey? = entries[alias]?.first
+            override fun getPrivateKey(alias: String?): PrivateKey? = when (alias) {
+                "public" -> publicEntry()?.first
+                "server" -> own.key
+                else -> null
+            }
 
             override fun chooseClientAlias(
                 keyType: Array<String>?, issuers: Array<Principal>?, socket: Socket?
@@ -146,8 +157,15 @@ object Tls {
 
             override fun getClientAliases(keyType: String?, issuers: Array<Principal>?): Array<String>? = null
         }
-        return SSLContext.getInstance("TLS").apply { init(arrayOf(manager), null, null) }
     }
+
+    /** One port, two identities: SNI decides which certificate to present. */
+    fun dualSslContext(ctx: Context): SSLContext =
+        SSLContext.getInstance("TLS").apply { init(arrayOf(dynamicManager(ctx, false)), null, null) }
+
+    /** The extra listener prefers the public certificate when one is present. */
+    fun publicSslContext(ctx: Context): SSLContext =
+        SSLContext.getInstance("TLS").apply { init(arrayOf(dynamicManager(ctx, true)), null, null) }
 
     // ---- public (Let's Encrypt) identity ----------------------------------
 
@@ -191,17 +209,6 @@ object Tls {
         } catch (e: Exception) {
             null
         }
-    }
-
-    /** The listener on the public port uses this, falling back to our own CA. */
-    fun publicSslContext(ctx: Context): SSLContext {
-        val pub = publicIdentity(ctx) ?: return sslContext(ctx)
-        val ks = KeyStore.getInstance("PKCS12")
-        ks.load(null, null)
-        ks.setKeyEntry("public", pub.key, STORE_PASS.toCharArray(), pub.chain)
-        val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
-        kmf.init(ks, STORE_PASS.toCharArray())
-        return SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, null, null) }
     }
 
     fun publicCertInfo(ctx: Context): Map<String, Any?> {

@@ -181,14 +181,10 @@ class CamService : Service(), HttpServer.Host {
             },
         )
         server = HttpServer(this, hub, this, Tls.dualSslContext(this))
-        // Certificate renewal runs in the background; rebuilding the
-        // listeners makes both pick up the new chain.
-        Acme.start(this) {
-            mainHandler.post {
-                restartMainServer()
-                restartPublicServer()
-            }
-        }
+        // The key managers read the certificate on each handshake, so a
+        // renewal or a switch needs no restart: rebuilding the HTTP server
+        // would discard every logged-in session.
+        Acme.start(this) { mainHandler.post { refreshAcmeListeners() } }
         configureRing()
         mainHandler.postDelayed({ configureRing() }, 3000)
         ensureChannel()
@@ -373,16 +369,26 @@ class CamService : Service(), HttpServer.Host {
         if (!ok) {
             State.lastError = "Could not bind port ${Prefs.port}"
         }
+        certPublicPort = Prefs.publicPort
+        certAcmePort = Prefs.acmePort
         restartPublicServer()
         restartChallengeServer()
         restartMdns()
     }
 
-    private fun restartMainServer() {
-        val wasRunning = server.isRunning
-        server.stop()
-        server = HttpServer(this, hub, this, Tls.dualSslContext(this))
-        if (wasRunning) server.start(Prefs.port)
+    private var certPublicPort = 0
+    private var certAcmePort = 0
+
+    /** Only a port change needs a listener rebuilt; cert changes do not. */
+    private fun refreshAcmeListeners() {
+        if (certPublicPort != Prefs.publicPort) {
+            certPublicPort = Prefs.publicPort
+            restartPublicServer()
+        }
+        if (certAcmePort != Prefs.acmePort) {
+            certAcmePort = Prefs.acmePort
+            restartChallengeServer()
+        }
     }
 
     private fun restartPublicServer() {
