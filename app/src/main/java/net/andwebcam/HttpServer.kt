@@ -631,8 +631,12 @@ class HttpServer(
             method == "GET" && path == "/" -> {
                 // A blank admin path puts the control page back at "/";
                 // otherwise "/" is the bare webcam view.
-                val page = if (Prefs.adminPath.isEmpty()) PAGE else PUBLIC_PAGE
-                respond(output, 200, "text/html; charset=utf-8", page.toByteArray())
+                val public = Prefs.adminPath.isNotEmpty()
+                val page = if (public) PUBLIC_PAGE else PAGE
+                respond(
+                    output, 200, "text/html; charset=utf-8", page.toByteArray(),
+                    frameAncestors = if (public) "*" else null,
+                )
             }
 
             method == "GET" && path == Prefs.adminUrl && path != "/" -> {
@@ -1002,6 +1006,7 @@ class HttpServer(
         contentType: String,
         body: ByteArray,
         extra: List<String> = emptyList(),
+        frameAncestors: String? = null,
     ) {
         val reason = when (code) {
             200 -> "OK"; 204 -> "No Content"; 401 -> "Unauthorized"
@@ -1019,13 +1024,18 @@ class HttpServer(
         // Everything is same-origin and the page is inline script and style:
         // these headers mainly say so, and keep the page out of other sites.
         sb.append("X-Content-Type-Options: nosniff\r\n")
-        sb.append("X-Frame-Options: DENY\r\n")
+        // The admin page must never be framed. The public view at "/" is
+        // deliberately embeddable, so it gets no X-Frame-Options and a CSP
+        // that allows any parent. Its subresources need no change: only the
+        // framed document is checked.
+        if (frameAncestors == null) sb.append("X-Frame-Options: DENY\r\n")
         sb.append("Referrer-Policy: no-referrer\r\n")
         sb.append("Strict-Transport-Security: max-age=31536000\r\n")
         sb.append(
             "Content-Security-Policy: default-src 'self'; " +
                 "script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; " +
-                "img-src 'self' data:; media-src 'self'; connect-src 'self'; frame-ancestors 'none'\r\n"
+                "img-src 'self' data:; media-src 'self'; connect-src 'self'; " +
+                "frame-ancestors ${frameAncestors ?: "'none'"}\r\n"
         )
         for (h in extra) sb.append(h).append("\r\n")
         sb.append("Connection: close\r\n\r\n")
