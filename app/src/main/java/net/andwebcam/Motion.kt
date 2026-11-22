@@ -35,7 +35,7 @@ class Motion {
     }
 
     /** A parsed zone with its live state. */
-    class Zone(val sensitivity: Int, val points: List<Pair<Double, Double>>) {
+    class Zone(val sensitivity: Int, val max: Int, val points: List<Pair<Double, Double>>) {
         var level = 0            // largest object seen in the zone, on the slider's scale
     }
 
@@ -145,6 +145,7 @@ class Motion {
     class Snapshot(
         val id: Int,
         val sensitivity: Int,
+        val max: Int,
         val points: List<Pair<Double, Double>>,
         val level: Int,
         val peakSince: Int,
@@ -169,7 +170,7 @@ class Motion {
         }
         zones.mapIndexed { i, z ->
             val peak = if (since > 0) maxOf(peaks[i], z.level) else z.level
-            Snapshot(i + 1, z.sensitivity, z.points, z.level, peak)
+            Snapshot(i + 1, z.sensitivity, z.max, z.points, z.level, peak)
         }
     }
 
@@ -271,9 +272,21 @@ class Motion {
                 aspect = parts[0].toDoubleOrNull() ?: 0.0
                 for (z in parts.drop(1)) {
                     val s = z.substringBefore(':').toIntOrNull()?.coerceIn(0, 100) ?: continue
-                    val nums = z.substringAfter(':').split(',').map { it.toDouble() }
+                    // New form is "min:max:x,y,..."; older zones have no max
+                    // and keep their old meaning of "anything above min".
+                    val rest = z.substringAfter(':')
+                    val max: Int
+                    val coords: String
+                    if (rest.contains(':')) {
+                        max = rest.substringBefore(':').toIntOrNull()?.coerceIn(0, 100) ?: 100
+                        coords = rest.substringAfter(':')
+                    } else {
+                        max = 100
+                        coords = rest
+                    }
+                    val nums = coords.split(',').map { it.toDouble() }
                     if (nums.size < 6 || nums.size % 2 != 0) continue
-                    zones.add(Zone(s, nums.chunked(2).map { Pair(it[0], it[1]) }))
+                    zones.add(Zone(s, max, nums.chunked(2).map { Pair(it[0], it[1]) }))
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "bad zone data: ${e.message}")
@@ -383,20 +396,23 @@ class Motion {
         val now = System.currentTimeMillis()
         for (track in tracks) {
             var best = -1
-            var bestIou = 0f
+            var bestDist = Float.MAX_VALUE
             for (i in cand.indices) {
                 if (matched[i]) continue
                 val c = cand[i]
-                val iou = overlap(track, c)
-                if (iou > bestIou) { bestIou = iou; best = i }
+                val d = trackDistance(track, c)
+                if (d < bestDist) { bestDist = d; best = i }
             }
-            if (best >= 0 && bestIou > 0.2f) {
+            // A vehicle near the camera can cross half the picture between
+            // two ticks. IoU matching would call it a new object every time,
+            // so associate by how far the centre moved instead.
+            if (best >= 0 && bestDist < 0.45f) {
                 val c = cand[best]
                 matched[best] = true
-                track.x += (c.x - track.x) * 0.5f
-                track.y += (c.y - track.y) * 0.5f
-                track.w += (c.w - track.w) * 0.5f
-                track.h += (c.h - track.h) * 0.5f
+                track.x += (c.x - track.x) * 0.7f
+                track.y += (c.y - track.y) * 0.7f
+                track.w += (c.w - track.w) * 0.7f
+                track.h += (c.h - track.h) * 0.7f
                 track.level = c.level
                 track.hits++
                 track.seen = now
@@ -408,7 +424,9 @@ class Motion {
         }
         tracks.removeAll { now - it.seen > 1500 }
         while (tracks.size > 16) tracks.removeAt(0)
-        val visible = tracks.filter { it.hits >= MIN_HITS }
+        // A big, confident object is worth drawing on the first sighting;
+        // small specks still need two ticks to prove they are not noise.
+        val visible = tracks.filter { it.hits >= MIN_HITS || it.level >= 40 }
 
         var nowActive = false
         val fired = ArrayList<Int>()
@@ -420,14 +438,15 @@ class Motion {
         synchronized(zones) {
             for ((index, zone) in zones.withIndex()) {
                 var biggest = 0
+                var acceptable = 0
                 for (track in visible) {
                     if (!overlapsZone(track, zone.points)) continue
                     if (track.level > biggest) biggest = track.level
-                    if (track.level >= zone.sensitivity && track.zone == 0) {
+                    val fits = track.level >= zone.sensitivity && track.level <= zone.max
+                    if (fits && track.level > acceptable) acceptable = track.level
+                    if (track.zone == 0) {
                         track.zone = index + 1
-                        track.firing = true
-                    } else if (track.zone == 0) {
-                        track.zone = index + 1
+                        track.firing = fits
                     }
                 }
                 if (biggest > biggestAny) biggestAny = biggest
@@ -436,7 +455,7 @@ class Motion {
                 if (biggest > overall) overall = biggest
                 if (levels.isNotEmpty()) levels.append(' ')
                 levels.append("z${index + 1}=$biggest")
-                if (enabled && biggest >= zone.sensitivity) {
+                if (enabled && acceptable > 0) {
                     nowActive = true
                     if (now - lastTrigger > COOLDOWN_MS) {
                         lastTrigger = now
@@ -488,14 +507,13 @@ class Motion {
         }
     }
 
-    private fun overlap(a: Track, b: Detection): Float {
-        val x1 = maxOf(a.x, b.x); val y1 = maxOf(a.y, b.y)
-        val x2 = minOf(a.x + a.w, b.x + b.w)
-        val y2 = minOf(a.y + a.h, b.y + b.h)
-        if (x2 <= x1 || y2 <= y1) return 0f
-        val inter = (x2 - x1) * (y2 - y1)
-        val union = a.w * a.h + b.w * b.h - inter
-        return if (union <= 0f) 0f else inter / union
+    /** How far a candidate's centre moved from a track's centre, 0-1 frame. */
+    private fun trackDistance(a: Track, b: Detection): Float {
+        val ax = a.x + a.w / 2f
+        val ay = a.y + a.h / 2f
+        val bx = b.x + b.w / 2f
+        val by = b.y + b.h / 2f
+        return kotlin.math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by))
     }
 
     /** Centroid or a corner inside the polygon is enough to count as inside. */

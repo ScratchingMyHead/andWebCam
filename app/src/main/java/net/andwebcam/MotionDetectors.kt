@@ -292,7 +292,9 @@ class CvDetector : FrameDetector {
             )
 
             val gate = Prefs.motionLightGate
-            val minArea = n * (0.003 + (100 - sensitivity) * 0.00012)
+            // At the default sensitivity a distant car is only a few dozen
+            // pixels at this size; an over-large minimum loses those entirely.
+            val minArea = n * (0.0008 + (100 - sensitivity) * 0.00004)
             val maxArea = n * 0.12
             val out = ArrayList<Detection>()
             var rejected = 0

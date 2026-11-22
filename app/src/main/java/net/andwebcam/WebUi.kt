@@ -84,16 +84,20 @@ object WebUi {
  .vrow button svg, .vrow a svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
  #zones { position:absolute; z-index:3; pointer-events:none }
  #zones polygon, #zones polyline, #zones circle, #zones rect, #zones text { vector-effect:non-scaling-stroke }
- .zslider { -webkit-appearance:none; appearance:none; width:110px; height:8px; border-radius:4px; background:#243038; outline:none; cursor:pointer }
- .zslider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
- .zslider::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
  .zid { display:inline-flex; align-items:center; justify-content:center; width:24px; height:24px; border-radius:50%; border:2px solid #ff8a80; color:#fff; font-size:12px; font-weight:700; flex:0 0 auto }
- .vrow .zslider { margin-left:auto }
  .zrow, .zhdr { display:grid; grid-template-columns:24px 1fr 31px; gap:8px; align-items:center }
+ .zrange { position:relative; height:22px; width:100%; touch-action:none }
+ .zrange .ztrack, .zrange .zfill { position:absolute; left:0; top:8px; height:6px; border-radius:3px }
+ .zrange .ztrack { right:0; background:#243038 }
+ .zrange .zfill { background:#2b6cb0 }
+ .zrange .zlevel { position:absolute; top:3px; width:2px; height:16px; margin-left:-1px; background:#fff; opacity:.75 }
+ .zrange .zthumb { position:absolute; top:1px; width:14px; height:20px; margin-left:-7px; border-radius:7px; background:#cfd8dc; cursor:ew-resize; box-shadow:0 0 0 1px #111 }
+ .zrange .zhi { background:#9aa9b3 }
+ .zrange .zhi.hidden { display:none }
+ .zrange .zlo { z-index:2 }
  .zrow { margin:7px 0 }
  .zhdr { margin:6px 0 2px; font-size:11px; color:#889 }
  .zhdr span:nth-child(2) { text-align:left }
- .zrow .zslider { width:100%; margin-left:0 }
  .dbg { font-family:monospace; font-size:11px; color:#9aa; background:#0d0d0d; border:1px solid #222; border-radius:6px; padding:6px 8px; max-height:190px; overflow:auto; line-height:1.5 }
  .dbgwrap { width:100% }
  .dbghead { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#8ab; margin:0 0 4px }
@@ -383,7 +387,7 @@ object WebUi {
         <button id="zoneSave" class="secondary hidden">Save</button>
         <button id="zoneCancel" class="secondary hidden">Cancel</button>
       </div>
-      <div class="zhdr"><span>ID</span><span>Minimum object size</span><span></span></div>
+      <div class="zhdr"><span>ID</span><span>Object size: min / max</span><span></span></div>
       <p class="hint hidden" id="drawHint">Click on the video to place at least three points, then Save.</p>
       <div id="zoneList"><p class="hint">No zones yet.</p></div>
       <div class="actions dbgact"><button id="dbgToggle" class="secondary">Hide debug</button></div>
@@ -1110,7 +1114,6 @@ function applyPane() {
       motionTick();
     }
     previewActive = true;
-    el('zones').classList.remove('hidden');
     drawZones();
   } else {
     if (motionPoll) {
@@ -1446,6 +1449,8 @@ function motionTick() {
     var cv = (d.detector || 'grid') === 'opencv';
     el('gridRow').classList.toggle('hidden', cv);
     el('lightRow').classList.toggle('hidden', !cv);
+    var maxes = el('zoneList').querySelectorAll('.zhi');
+    for (var i = 0; i < maxes.length; i++) { maxes[i].classList.toggle('hidden', !cv); }
     var derr = d.detectorError || '';
     if (derr !== lastDetectorError) { lastDetectorError = derr; if (derr) { motionMsg(derr); } }
     drawZones();
@@ -1501,15 +1506,7 @@ function buildZoneList(d) {  var list = el('zoneList');
       name.className = 'zid';
       name.textContent = z.id;
       name.title = 'Zone ' + z.id;
-      var slider = document.createElement('input');
-      slider.type = 'range';
-      slider.min = 0;
-      slider.max = 100;
-      slider.className = 'zslider';
-      slider.setAttribute('aria-label', 'Minimum object size for zone ' + z.id);
-      slider.dataset.id = z.id;
-      slider.value = z.sensitivity;
-      slider.onchange = function() { saveZones(); };
+      var range = zoneRange(z);
       var del = document.createElement('button');
       del.className = 'secondary';
       del.innerHTML = ICON_BIN;
@@ -1519,11 +1516,13 @@ function buildZoneList(d) {  var list = el('zoneList');
         if (!confirm('Delete zone ' + z.id + '?')) { return; }
         var left = ((motionData || {}).zones || [])
           .filter(function(x) { return x.id !== z.id; })
-          .map(function(x) { return { sensitivity: x.sensitivity, points: x.points }; });
+          .map(function(x) {
+            return { sensitivity: x.sensitivity, max: x.max, points: x.points };
+          });
         saveZones(left);
       };
       row.appendChild(name);
-      row.appendChild(slider);
+      row.appendChild(range);
       row.appendChild(del);
       list.appendChild(row);
     });
@@ -1532,51 +1531,135 @@ function buildZoneList(d) {  var list = el('zoneList');
   // pulled out from under the finger: the fill is the live level, the handle
   // is the sensitivity threshold, and red means the zone is firing.
   zones.forEach(function(z) {
-    var s = list.querySelector('input[data-id="' + z.id + '"]');
-    if (!s) { return; }
-    if (document.activeElement !== s) { s.value = z.sensitivity; }
+    var r = list.querySelector('.zrange[data-id="' + z.id + '"]');
+    if (!r) { return; }
+    if (!r._dragging) { r._lo = z.sensitivity; r._hi = z.max == null ? 100 : z.max; }
     // The phone gives the highest level since the previous poll, so a spike
     // between polls still reaches us. Show it immediately, then settle back
     // to the live level quickly, keeping the meter lively.
     var live = z.level || 0;
     var shown = Math.max(live, z.peakSince || 0);
-    paintLevel(s, shown);
-    clearTimeout(s._decay);
+    paintRange(r, shown);
+    clearTimeout(r._decay);
     if (shown > live) {
-      s._decay = setTimeout(function() { paintLevel(s, live); }, 700);
+      r._decay = setTimeout(function() { paintRange(r, live); }, 700);
     }
   });
   el('zoneClear').classList.toggle('hidden', !zones.length || !!drawing);
 }
 
-function paintLevel(s, level) {
-  var color = level >= (parseInt(s.value, 10) || 0) ? '#e53935' : '#2b6cb0';
-  s.style.background = 'linear-gradient(to right, ' + color + ' 0%, ' + color + ' ' +
-    Math.max(level, 2) + '%, #243038 ' + Math.max(level, 2) + '%, #1a1a1a 100%)';
+// One control with two handles: the light handle is the minimum object size,
+// the dark one the maximum. Pushing either handle past the other carries the
+// other along, leaving a small gap so the range never collapses to zero.
+var RANGE_GAP = 5;
+var activeRange = null;
+
+function zoneRange(z) {
+  var r = document.createElement('div');
+  r.className = 'zrange';
+  r.dataset.id = z.id;
+  r._lo = z.sensitivity || 0;
+  r._hi = z.max == null ? 100 : z.max;
+  r._level = 0;
+  r.innerHTML = '<div class="ztrack"></div><div class="zfill"></div>' +
+    '<div class="zlevel"></div><div class="zlo zthumb"></div><div class="zhi zthumb"></div>';
+  r.addEventListener('pointerdown', function(e) {
+    if (e.button !== 0) { return; }
+    var which = e.target.classList.contains('zhi') ? 'hi' :
+      (e.target.classList.contains('zlo') ? 'lo' : null);
+    if (!which) {
+      var v = rangePos(r, e);
+      which = Math.abs(v - r._lo) <= Math.abs(v - r._hi) ? 'lo' : 'hi';
+    }
+    activeRange = { r: r, which: which };
+    r._dragging = true;
+    e.preventDefault();
+  });
+  paintRange(r, 0);
+  return r;
 }
 
+function rangePos(r, e) {
+  var b = r.getBoundingClientRect();
+  return Math.max(0, Math.min(100, (e.clientX - b.left) / b.width * 100));
+}
+
+function paintRange(r, level) {
+  r._level = level || 0;
+  var firing = r._level >= r._lo && r._level <= r._hi;
+  var fill = r.querySelector('.zfill');
+  fill.style.width = Math.max(r._level, 2) + '%';
+  fill.style.background = firing ? '#e53935' : '#2b6cb0';
+  r.querySelector('.zlevel').style.left = r._level + '%';
+  r.querySelector('.zlo').style.left = r._lo + '%';
+  r.querySelector('.zhi').style.left = r._hi + '%';
+}
+
+document.addEventListener('pointermove', function(e) {
+  if (!activeRange) { return; }
+  var r = activeRange.r;
+  var v = rangePos(r, e);
+  if (activeRange.which === 'lo') {
+    if (v >= r._hi) {
+      r._hi = Math.min(100, v + RANGE_GAP);
+      r._lo = Math.min(v, r._hi - RANGE_GAP);
+    } else {
+      r._lo = Math.max(0, Math.min(v, r._hi - RANGE_GAP));
+    }
+  } else if (r.querySelector('.zhi').classList.contains('hidden')) {
+    // Grid mode has no upper bound: the dark handle stays at the end.
+    r._hi = 100;
+    r._lo = Math.max(0, Math.min(v, r._hi - RANGE_GAP));
+  } else {
+    if (v <= r._lo) {
+      r._lo = Math.max(0, v - RANGE_GAP);
+      r._hi = Math.max(v, r._lo + RANGE_GAP);
+    } else {
+      r._hi = Math.min(100, Math.max(v, r._lo + RANGE_GAP));
+    }
+  }
+  paintRange(r, r._level);
+});
+
+document.addEventListener('pointerup', function() {
+  if (!activeRange) { return; }
+  activeRange.r._dragging = false;
+  activeRange = null;
+  saveZones();
+});
+
 // The zone set is sent in the compact form the phone stores:
-// "aspect;sens:x,y,x,y,...;sens:...".
+// "aspect;sens:max:x,y,x,y,...;sens:...". The max is optional; old zone
+// strings with no max are read as 100.
 function zonesPayload(list) {
   var d = motionData || {};
   var parts = [(d.aspect || 1.7778).toFixed(4)];
   list.forEach(function(z) {
-    parts.push((z.sensitivity || 0) + ':' + z.points.map(function(p) {
+    parts.push((z.sensitivity || 0) + ':' + (z.max == null ? 100 : z.max) + ':' + z.points.map(function(p) {
       return Number(p[0]).toFixed(4) + ',' + Number(p[1]).toFixed(4);
     }).join(','));
   });
   return parts.join(';');
 }
 
+// Dragging one handle and then the other can fire two saves within a few
+// milliseconds. Coalesce them so an older write cannot land after a newer one.
+var saveZonesTimer = null;
 function saveZones(list) {
+  clearTimeout(saveZonesTimer);
+  saveZonesTimer = setTimeout(function() { sendZones(list); }, 120);
+}
+
+function sendZones(list) {
   var d = motionData || { zones: [] };
   // Without an explicit list (a slider change), the sensitivities come from
   // the sliders themselves: the polled copy here is whatever the phone last
   // sent, and writing that back would undo the drag.
   var payload = list || (d.zones || []).map(function(z) {
-    var s = document.querySelector('input[data-id="' + z.id + '"]');
+    var r = document.querySelector('.zrange[data-id="' + z.id + '"]');
     return {
-      sensitivity: s ? (parseInt(s.value, 10) || 0) : z.sensitivity,
+      sensitivity: r ? Math.round(r._lo) : z.sensitivity,
+      max: r ? Math.round(r._hi) : (z.max == null ? 100 : z.max),
       points: z.points,
     };
   });
@@ -1631,7 +1714,7 @@ el('zoneSave').onclick = function() {
   var list = (d.zones || []).map(function(z) {
     return { sensitivity: z.sensitivity, points: z.points };
   });
-  list.push({ sensitivity: 50, points: drawing });
+  list.push({ sensitivity: 50, max: 100, points: drawing });
   drawing = null;
   updateDrawUi();
   saveZones(list);
@@ -1709,11 +1792,32 @@ function placeZones() {
   var s = el('zones');
   var img = el('vid'), c = el('video');
   var r = img.getBoundingClientRect(), cr = c.getBoundingClientRect();
-  if (!r.width || !r.height || s.classList.contains('hidden')) { return; }
+  if (!r.width || !r.height) { return false; }
   s.style.left = (r.left - cr.left) + 'px';
   s.style.top = (r.top - cr.top) + 'px';
   s.style.width = r.width + 'px';
   s.style.height = r.height + 'px';
+  return true;
+}
+
+// Opening the pane changes the video's layout, so the first measurement is
+// often the old size. Keep the SVG hidden until two consecutive frames have
+// placed it at the settled size instead of showing a flash of wrong zones.
+function revealOverlay() {
+  var s = el('zones');
+  if (!s.classList.contains('hidden')) { placeZones(); return; }
+  var tries = 0;
+  function step() {
+    if (!placeZones()) {
+      if (++tries < 20) { requestAnimationFrame(step); }
+      return;
+    }
+    requestAnimationFrame(function() {
+      placeZones();
+      s.classList.remove('hidden');
+    });
+  }
+  requestAnimationFrame(step);
 }
 
 function centroidOf(points) {
@@ -1737,7 +1841,7 @@ function drawZones() {
     var pts = z.points.map(function(p) {
       return (p[0] * 1000).toFixed(1) + ',' + (p[1] * 1000).toFixed(1);
     }).join(' ');
-    var firing = z.level >= z.sensitivity;
+    var firing = z.level >= z.sensitivity && z.level <= (z.max == null ? 100 : z.max);
     out.push('<polygon points="' + pts + '" fill="rgba(255,82,82,' +
       (firing ? 0.35 : 0.12) + ')" stroke="' + (firing ? '#ff1744' : '#ff8a80') +
       '" stroke-width="3"/>');
@@ -1773,7 +1877,7 @@ function drawZones() {
     });
   }
   s.innerHTML = out.join('');
-  s.classList.remove('hidden');
+  revealOverlay();
 }
 
 // A click inside the picture adds a point while a zone is being drawn; the

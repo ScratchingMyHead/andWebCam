@@ -93,13 +93,19 @@ object Prefs {
     private fun ensureAdminPath() {
         if (sp.getBoolean(KEY_ADMIN_PATH_SET, false)) return
         val existing = sp.getString(KEY_ADMIN_PATH, "") ?: ""
+        // A deliberate blank is just as much a user choice as a path, so
+        // never replace it with a fresh random one on a later start.
+        if (existing.isEmpty()) {
+            sp.edit().putBoolean(KEY_ADMIN_PATH_SET, true).commit()
+            return
+        }
         if (existing.length != 8) {
             val bytes = ByteArray(4)
             rng.nextBytes(bytes)
             sp.edit().putString(KEY_ADMIN_PATH, bytes.joinToString("") { "%02x".format(it) }).apply()
         }
         // From now on the value is ours to change, including deliberately blank.
-        sp.edit().putBoolean(KEY_ADMIN_PATH_SET, true).apply()
+        sp.edit().putBoolean(KEY_ADMIN_PATH_SET, true).commit()
     }
 
     private fun edit(block: SharedPreferences.Editor.() -> Unit) =
@@ -117,13 +123,18 @@ object Prefs {
      */
     var adminPath: String
         get() = sp.getString(KEY_ADMIN_PATH, "")!!
-        set(v) = edit {
-            val clean = v.trim().trim('/').lowercase()
-            putString(
-                KEY_ADMIN_PATH,
-                if (clean.isEmpty() || clean.matches(Regex("[a-z0-9-]{1,32}"))) clean else adminPath
-            )
-            putBoolean(KEY_ADMIN_PATH_SET, true)
+        // commit(), not apply(): this is the setting people edit from the
+        // phone and then kill the service; losing the write brings back a
+        // random path and locks them out of the URL they just memorised.
+        set(v) {
+            sp.edit().apply {
+                val clean = v.trim().trim('/').lowercase()
+                putString(
+                    KEY_ADMIN_PATH,
+                    if (clean.isEmpty() || clean.matches(Regex("[a-z0-9-]{1,32}"))) clean else adminPath
+                )
+                putBoolean(KEY_ADMIN_PATH_SET, true)
+            }.commit()
         }
 
     /** Never sent to anonymous viewers. */
