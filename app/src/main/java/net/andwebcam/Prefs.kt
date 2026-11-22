@@ -44,6 +44,13 @@ object Prefs {
     private const val KEY_MOTION_PREROLL = "motion_preroll"
     private const val KEY_MOTION_LEVEL = "motion_level"
     private const val KEY_MOTION_GRID = "motion_grid"
+    private const val KEY_CERT_DOMAIN = "cert_domain"
+    private const val KEY_CERT_TOKEN = "cert_token"
+    private const val KEY_CERT_METHOD = "cert_method"
+    private const val KEY_CERT_PUBLISH = "cert_publish"
+    private const val KEY_CERT_STAGING = "cert_staging"
+    private const val KEY_ACME_PORT = "acme_port"
+    private const val KEY_PUBLIC_PORT = "public_port"
 
     private const val KEY_ADMIN_USER = "admin_user"
     private const val KEY_PASS_PLAIN = "pass_plain"
@@ -255,6 +262,42 @@ object Prefs {
     var motionGrid: Int
         get() = sp.getInt(KEY_MOTION_GRID, 32)
         set(v) = edit { putInt(KEY_MOTION_GRID, v.coerceIn(4, 160)) }
+
+    // ---- public certificate -----------------------------------------------
+
+    /** The DNS name the Let's Encrypt certificate is issued for. */
+    var certDomain: String
+        get() = sp.getString(KEY_CERT_DOMAIN, "")!!.trim().lowercase()
+        set(v) = edit { putString(KEY_CERT_DOMAIN, v.trim().lowercase()) }
+
+    /** DuckDNS API token. Never sent to the browser; the page only sees a flag. */
+    var certToken: String
+        get() = sp.getString(KEY_CERT_TOKEN, "")!!.trim()
+        set(v) = edit { putString(KEY_CERT_TOKEN, v.trim()) }
+
+    /** "dns-01" (DuckDNS TXT) or "http-01" (port-80 forward). */
+    var certMethod: String
+        get() = sp.getString(KEY_CERT_METHOD, "dns-01")!!
+        set(v) = edit { putString(KEY_CERT_METHOD, if (v == "http-01") v else "dns-01") }
+
+    /** "lan", "wan" or "none": which address DuckDNS should publish. */
+    var certPublish: String
+        get() = sp.getString(KEY_CERT_PUBLISH, "lan")!!
+        set(v) = edit { putString(KEY_CERT_PUBLISH, if (v in listOf("lan", "wan", "none")) v else "lan") }
+
+    var certStaging: Boolean
+        get() = sp.getBoolean(KEY_CERT_STAGING, false)
+        set(v) = edit { putBoolean(KEY_CERT_STAGING, v) }
+
+    /** Internal port the router forwards external 80 to, for http-01. */
+    var acmePort: Int
+        get() = sp.getInt(KEY_ACME_PORT, 8080)
+        set(v) = edit { putInt(KEY_ACME_PORT, v.coerceIn(1, 65535)) }
+
+    /** Extra HTTPS listener presenting the Let's Encrypt certificate. */
+    var publicPort: Int
+        get() = sp.getInt(KEY_PUBLIC_PORT, 8444)
+        set(v) = edit { putInt(KEY_PUBLIC_PORT, v.coerceIn(1, 65535)) }
 
     // ---- admin credentials ------------------------------------------------
 

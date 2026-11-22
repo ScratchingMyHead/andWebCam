@@ -49,6 +49,8 @@ object Tls {
     private const val KEY = "server.key.pk8"
     private const val CA_CERT = "root.crt"
     private const val DAYS = 3650L
+    private const val PUB_CERT = "public.crt"
+    private const val PUB_KEY = "public.key.pk8"
 
     private class Identity(
         val cert: X509Certificate,
@@ -86,6 +88,72 @@ object Tls {
         return SSLContext.getInstance("TLS").apply {
             init(kmf.keyManagers, null, null)
         }
+    }
+
+    // ---- public (Let's Encrypt) identity ----------------------------------
+
+    internal class PublicIdentity(
+        val cert: X509Certificate,
+        val key: PrivateKey,
+        val chain: Array<X509Certificate>,
+    )
+
+    /**
+     * The ACME certificate, if one has been issued for the currently
+     * configured name and is still good. Nothing is cached: a renewal writes
+     * new files, and the next call picks them straight up.
+     */
+    @Synchronized
+    internal fun publicIdentity(ctx: Context): PublicIdentity? {
+        val name = Prefs.certDomain
+        if (name.isEmpty()) return null
+        val dir = File(ctx.applicationContext.filesDir, DIR)
+        val certFile = File(dir, PUB_CERT)
+        val keyFile = File(dir, PUB_KEY)
+        if (!certFile.isFile || !keyFile.isFile) return null
+        return try {
+            val cf = CertificateFactory.getInstance("X.509")
+            // Android's generateCertificates() reads only the first PEM block
+            // from a stream here, so split the chain ourselves. Trust anchors
+            // are left out: the client already has them and a self-signed root
+            // in the handshake only confuses path building.
+            val chain = Regex("-----BEGIN CERTIFICATE-----[\\s\\S]*?-----END CERTIFICATE-----")
+                .findAll(certFile.readText())
+                .mapNotNull { cf.generateCertificate(it.value.byteInputStream()) as? X509Certificate }
+                .filter { it.subjectX500Principal != it.issuerX500Principal }
+                .toList()
+                .toTypedArray()
+            val leaf = chain.firstOrNull() ?: return null
+            val key = KeyFactory.getInstance("EC")
+                .generatePrivate(PKCS8EncodedKeySpec(keyFile.readBytes()))
+            // A certificate for an old name is not usable for this one.
+            if (!usable(leaf, name)) return null
+            PublicIdentity(leaf, key, chain)
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** The listener on the public port uses this, falling back to our own CA. */
+    fun publicSslContext(ctx: Context): SSLContext {
+        val pub = publicIdentity(ctx) ?: return sslContext(ctx)
+        val ks = KeyStore.getInstance("PKCS12")
+        ks.load(null, null)
+        ks.setKeyEntry("public", pub.key, STORE_PASS.toCharArray(), pub.chain)
+        val kmf = KeyManagerFactory.getInstance(KeyManagerFactory.getDefaultAlgorithm())
+        kmf.init(ks, STORE_PASS.toCharArray())
+        return SSLContext.getInstance("TLS").apply { init(kmf.keyManagers, null, null) }
+    }
+
+    fun publicCertInfo(ctx: Context): Map<String, Any?> {
+        val pub = publicIdentity(ctx) ?: return mapOf("valid" to false)
+        return mapOf(
+            "valid" to true,
+            "domain" to Prefs.certDomain,
+            "notAfter" to pub.cert.notAfter.time,
+            "fingerprint" to MessageDigest.getInstance("SHA-256")
+                .digest(pub.cert.encoded).joinToString(":") { "%02X".format(it) },
+        )
     }
 
     // ---- identity storage ---------
@@ -249,7 +317,7 @@ object Tls {
      * from the platform are written by hand: the public key comes back already
      * encoded from the KeyPair.
      */
-    private object Der {
+    internal object Der {
         fun raw(tag: Int, body: ByteArray): ByteArray =
             byteArrayOf(tag.toByte()) + length(body.size) + body
 

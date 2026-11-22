@@ -13,6 +13,7 @@ import java.net.Socket
 import java.security.SecureRandom
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import javax.net.ssl.SSLContext
 import javax.net.ssl.SSLServerSocket
 
 /**
@@ -31,6 +32,7 @@ class HttpServer(
     private val ctx: Context,
     private val hub: StreamHub,
     private val host: Host,
+    sslContext: SSLContext = Tls.sslContext(ctx),
 ) {
     interface Host {
         fun statusJson(): MutableMap<String, Any?>
@@ -117,7 +119,7 @@ class HttpServer(
     /** How this request was authenticated, for the status page and the log. */
     private class Who(val role: Role, val method: String)
 
-    private val ssl = Tls.sslContext(ctx)
+    private val ssl: SSLContext = sslContext
     private val pool = Executors.newCachedThreadPool()
     private val sessions = ConcurrentHashMap<String, Long>()
     private val rng = SecureRandom()
@@ -371,6 +373,34 @@ class HttpServer(
                 if (role != Role.ADMIN) unauthorized(output) else {
                     val vals = parseFlatJson(String(body))
                     host.applySettings(vals)
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                }
+            }
+
+            method == "GET" && path == "/api/cert/pem" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val f = File(ctx.applicationContext.filesDir, "tls/public.crt")
+                    if (!f.isFile) respond(output, 404, "text/plain", "no certificate".toByteArray())
+                    else respond(output, 200, "application/x-pem-file", f.readBytes())
+                }
+            }
+
+            method == "GET" && path == "/api/cert" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    respond(output, 200, "application/json", jsonBytes(Acme.status(ctx)))
+                }
+            }
+
+            method == "POST" && path == "/api/cert/save" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    Acme.configure(parseFlatJson(String(body)))
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                }
+            }
+
+            method == "POST" && path == "/api/cert/issue" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    Acme.issueAsync(ctx)
                     respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
                 }
             }

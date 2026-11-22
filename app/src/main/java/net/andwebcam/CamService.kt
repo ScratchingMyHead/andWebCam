@@ -78,6 +78,7 @@ class CamService : Service(), HttpServer.Host {
     private lateinit var scaler: StreamScaler
     private val lastFull = java.util.concurrent.atomic.AtomicReference<ByteArray?>()
     private lateinit var server: HttpServer
+    private var publicServer: HttpServer? = null
     private val ring = VideoRing()
     private val recorder = Recorder(this)
     private val motion = Motion()
@@ -180,6 +181,9 @@ class CamService : Service(), HttpServer.Host {
             },
         )
         server = HttpServer(this, hub, this)
+        // Certificate renewal runs in the background; when it installs a new
+        // chain the public listener must be rebuilt to pick it up.
+        Acme.start(this) { mainHandler.post { restartPublicServer() } }
         configureRing()
         mainHandler.postDelayed({ configureRing() }, 3000)
         ensureChannel()
@@ -364,7 +368,26 @@ class CamService : Service(), HttpServer.Host {
         if (!ok) {
             State.lastError = "Could not bind port ${Prefs.port}"
         }
+        restartPublicServer()
+        restartChallengeServer()
         restartMdns()
+    }
+
+    private fun restartPublicServer() {
+        publicServer?.stop()
+        publicServer = HttpServer(this, hub, this, Tls.publicSslContext(this))
+        val port = Prefs.publicPort
+        if (!publicServer!!.start(port)) {
+            Log.w(TAG, "Could not bind the public HTTPS port $port")
+        }
+    }
+
+    private fun restartChallengeServer() {
+        if (Prefs.certDomain.isNotEmpty() && Prefs.certMethod == "http-01") {
+            ChallengeServer.start(Prefs.acmePort)
+        } else {
+            ChallengeServer.stop()
+        }
     }
 
     private fun restartMdns() {
@@ -569,6 +592,10 @@ class CamService : Service(), HttpServer.Host {
         unwatchNetwork()
         cancelMaintenance()
         server.stop()
+        publicServer?.stop()
+        publicServer = null
+        ChallengeServer.stop()
+        Acme.stop()
         // A running session must end with the service, or its file is left
         // unfinishable and the next start deletes it.
         recorder.stopBlocking(3000)
@@ -634,6 +661,7 @@ class CamService : Service(), HttpServer.Host {
             "canReboot" to (getSystemService(DevicePolicyManager::class.java)
                 ?.isDeviceOwnerApp(packageName) == true),
             "updateNote" to Prefs.updateNote,
+            "cert" to Acme.status(this),
         )
     }
 

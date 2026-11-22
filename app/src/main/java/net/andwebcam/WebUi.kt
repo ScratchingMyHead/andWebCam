@@ -124,6 +124,10 @@ object WebUi {
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
  .check { display:flex; align-items:center; gap:8px; font-size:13px; color:#bbb }
+ .certbox { margin:10px 0; border:1px solid #222; border-radius:6px; padding:7px 9px }
+ .certbox summary { cursor:pointer; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#8ab }
+ .certbox[open] summary { margin-bottom:6px }
+ .certbox .row { margin:6px 0 }
 </style>
 </head>
 <body>
@@ -231,6 +235,47 @@ object WebUi {
       <div class="row">
         <label class="check"><input id="auto" type="checkbox"> Start streaming when the service starts</label>
       </div>
+
+      <details class="certbox">
+        <summary>Public certificate</summary>
+        <div class="row">
+          <label>Domain</label>
+          <input id="s_cdom" type="text" placeholder="cam.duckdns.org" spellcheck="false">
+        </div>
+        <div class="row">
+          <label>DuckDNS token</label>
+          <input id="s_ctok" type="password" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="row">
+          <label>Validation</label>
+          <select id="s_cmethod">
+            <option value="dns-01">DNS (DuckDNS TXT)</option>
+            <option value="http-01">HTTP (forward port 80)</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>Publish address</label>
+          <select id="s_cip">
+            <option value="lan">Phone's LAN address</option>
+            <option value="wan">WAN address</option>
+            <option value="none">Do not update</option>
+          </select>
+        </div>
+        <div class="row"><label class="check"><input id="s_cstage" type="checkbox"> Use staging (test certificates)</label></div>
+        <div class="row">
+          <label>HTTP challenge port <span id="v_acmeport">8080</span></label>
+          <input id="s_cport" type="number" min="1" max="65535">
+        </div>
+        <div class="row">
+          <label>Public HTTPS port <span id="v_pubport">8444</span></label>
+          <input id="s_pport" type="number" min="1" max="65535">
+        </div>
+        <div class="actions">
+          <button id="certSave">Save certificate settings</button>
+          <button id="certIssue">Get certificate</button>
+        </div>
+        <p class="hint" id="certMsg"></p>
+      </details>
 
       <h2>Service</h2>
       <div class="row">
@@ -630,6 +675,33 @@ setInterval(function() {
   if (s && s.recording && s.recStart) { updateStatusText(s); }
 }, 1000);
 
+var certMsgHold = 0;
+function certText(c) {
+  if (c.busy) { return 'Getting certificate...'; }
+  if (c.error) { return c.error; }
+  var ci = c.cert || {};
+  if (ci.valid) {
+    return 'Certificate for ' + (ci.domain || c.domain) + ', valid until ' +
+      new Date(ci.notAfter).toLocaleDateString();
+  }
+  return c.domain ? 'No certificate for ' + c.domain + ' yet.' : 'No certificate yet.';
+}
+function updateCert(c) {
+  if (document.activeElement !== el('s_cdom')) { el('s_cdom').value = c.domain || ''; }
+  if (document.activeElement !== el('s_cmethod')) { el('s_cmethod').value = c.method || 'dns-01'; }
+  if (document.activeElement !== el('s_cip')) { el('s_cip').value = c.publish || 'lan'; }
+  if (document.activeElement !== el('s_cstage')) { el('s_cstage').checked = !!c.staging; }
+  if (document.activeElement !== el('s_cport')) { el('s_cport').value = c.acmePort || 8080; }
+  if (document.activeElement !== el('s_pport')) { el('s_pport').value = c.publicPort || 8444; }
+  el('s_ctok').placeholder = c.hasToken ? 'Saved - leave blank to keep' : 'DuckDNS token';
+  if (Date.now() > certMsgHold) {
+    el('certMsg').textContent = certText(c);
+    el('certMsg').style.color = c.error ? '#f66' : '#888';
+  }
+  el('certIssue').disabled = !!c.busy;
+  el('certIssue').textContent = c.busy ? 'Working...' : 'Get certificate';
+}
+
 function refresh() {
   fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
     var now = Date.now();
@@ -701,6 +773,7 @@ function refresh() {
     el('s_torch').disabled = !s.torchAvailable;
     if (document.activeElement !== el('s_anon')) { el('s_anon').checked = !!s.anonView; }
     if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
+    updateCert(s.cert || {});
   }).catch(function() {
     el('i_state').textContent = 'unreachable';
   });
@@ -751,6 +824,34 @@ el('s_orient').onchange = function() { setSetting('orientation', this.value); };
 el('s_torch').onchange = function() { setSetting('torch', this.checked); };
 el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
+el('certSave').onclick = function() {
+  var o = {
+    domain: el('s_cdom').value,
+    method: el('s_cmethod').value,
+    publish: el('s_cip').value,
+    staging: el('s_cstage').checked,
+    acmePort: el('s_cport').value,
+    publicPort: el('s_pport').value
+  };
+  var t = el('s_ctok').value;
+  if (t) { o.token = t; }
+  var b = this;
+  b.disabled = true;
+  post('/api/cert/save', o).then(function() {
+    el('s_ctok').value = '';
+    certMsgHold = Date.now() + 2500;
+    el('certMsg').textContent = 'Saved.';
+    b.disabled = false;
+    refresh();
+  }).catch(function() { b.disabled = false; });
+};
+el('certIssue').onclick = function() {
+  el('certMsg').textContent = 'Getting certificate...';
+  post('/api/cert/issue', {}).then(function(r) {
+    if (r.ok === false) { el('certMsg').textContent = 'Not authorized'; }
+    setTimeout(refresh, 500);
+  });
+};
 // The button says what it will do straight away (and refuses a second click)
 // rather than waiting for the answer, which takes a moment on a busy phone.
 el('toggle').onclick = function() {
