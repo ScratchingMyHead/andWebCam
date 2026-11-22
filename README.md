@@ -1,8 +1,9 @@
 # andWebCam
 
-A headless-first LAN webcam for Android. It turns a phone into an HTTPS MJPEG
+A headless-first webcam for Android. It turns a phone into an HTTPS MJPEG
 camera with a small web UI, on-device recording and optional motion detection.
-It runs as a foreground service, advertises itself over mDNS, and is configured
+It runs as a foreground service, advertises itself over mDNS, can be reached
+over the internet with an optional public certificate, and is configured
 entirely from a browser.
 
 ## Features
@@ -24,8 +25,8 @@ entirely from a browser.
 
 ## Requirements
 
-- An arm64-v8a Android phone (Android 9 / API 28 or newer) on the same Wi-Fi
-  as the viewer.
+- An arm64-v8a Android phone (Android 9 / API 28 or newer), reachable from
+  wherever you plan to watch.
 - Camera permission. Notifications permission on Android 13+ for the
   foreground service. Battery-optimisation exemption is recommended so the
   camera survives with the screen off.
@@ -48,43 +49,9 @@ The release APK is written to `app/build/outputs/apk/release/`.
 
 ## Quick start
 
-1. Open `https://andwebcam.local:8443/` (or the address shown on the phone).
-2. On first run the admin password is generated and displayed on the phone
-   screen. Log in as `admin` with it. Once changed in the web UI it is stored
-   as a hash and is no longer displayed.
-3. The gear, record and motion buttons open the settings, recording and motion
-   panes. Most camera settings apply immediately; service settings have an
-   **Apply service settings** button.
-
-A blank **Admin page path** puts the admin UI at `/` and disables the public
-viewer. By default the admin UI lives at a random path and `/` shows the bare
-camera.
+- After installation, connect to the address displayed on the phone.
+- Log in using the password displayed on the phone and set a new admin password.
 
 ## Documentation
 
-[DOCUMENTATION.md](DOCUMENTATION.md) covers every setting, motion zones and
-tracking, recording, certificates, storage, updates and the HTTP API.
-
-## Consuming the stream
-
-```
-curl -sk https://andwebcam.local:8443/cert -o andwebcam.pem
-ffmpeg -ca_file andwebcam.pem -tls_verify 1 \
-       -reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 2 \
-       -i https://admin:PASSWORD@andwebcam.local:8443/video \
-       -c:v rawvideo -pix_fmt yuv420p -f v4l2 /dev/video10
-```
-
-The reconnect and certificate options go before `-i`.
-
-## Updating and logs
-
-Upload an APK from the bottom of the settings pane, or:
-
-```
-curl -k -u admin:PASSWORD --data-binary @andWebCam.apk \
-     https://andwebcam.local:8443/api/update
-```
-
-The app restarts itself after installing. Logs can be read with
-`/api/log?lines=500` or downloaded from the settings pane.
+[DOCUMENTATION.md](DOCUMENTATION.md)
