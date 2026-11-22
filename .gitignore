@@ -14,3 +14,4 @@ local.properties
 # Release signing key and its password, kept with the source rather than in
 # ~/.config so it does not get lost. Never commit these.
 keystore/
+tools/camrelay/camrelay
