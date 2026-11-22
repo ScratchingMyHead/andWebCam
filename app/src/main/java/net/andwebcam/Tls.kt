@@ -3,6 +3,7 @@ package net.andwebcam
 import android.content.Context
 import android.util.Base64
 import java.io.File
+import java.net.Socket
 import java.math.BigInteger
 import java.security.KeyFactory
 import java.security.KeyPairGenerator
@@ -15,12 +16,19 @@ import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import java.security.spec.ECGenParameterSpec
 import java.security.spec.PKCS8EncodedKeySpec
+import java.security.Principal
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.TimeZone
+import javax.net.ssl.ExtendedSSLSession
 import javax.net.ssl.KeyManagerFactory
+import javax.net.ssl.SNIServerName
 import javax.net.ssl.SSLContext
+import javax.net.ssl.SSLEngine
+import javax.net.ssl.SSLSession
+import javax.net.ssl.SSLSocket
+import javax.net.ssl.X509ExtendedKeyManager
 
 /**
  * The phone's TLS identity.
@@ -88,6 +96,57 @@ object Tls {
         return SSLContext.getInstance("TLS").apply {
             init(kmf.keyManagers, null, null)
         }
+    }
+
+    /**
+     * One listener, two identities. Browsers send the name they want in SNI;
+     * pick the matching certificate so cam2.local keeps its own trusted root
+     * while the public DNS name gets the Let's Encrypt chain. Clients that
+     * send no SNI (or an unknown name) get the self-signed identity.
+     */
+    fun dualSslContext(ctx: Context): SSLContext {
+        val own = identity(ctx)
+        val entries = LinkedHashMap<String, Pair<PrivateKey, Array<X509Certificate>>>()
+        entries["server"] = Pair(own.key, arrayOf(own.cert, own.ca))
+        publicIdentity(ctx)?.let { entries["public"] = Pair(it.key, it.chain) }
+
+        val manager = object : X509ExtendedKeyManager() {
+            private fun pick(session: SSLSession?): String {
+                val wanted = Prefs.certDomain
+                if (wanted.isNotEmpty() && entries.containsKey("public")) {
+                    val names = (session as? ExtendedSSLSession)?.requestedServerNames
+                    if (names != null) {
+                        for (n in names) {
+                            val host = String(n.encoded, Charsets.US_ASCII).trimEnd('\u0000')
+                            if (host.equals(wanted, ignoreCase = true)) return "public"
+                        }
+                    }
+                }
+                return "server"
+            }
+
+            override fun chooseServerAlias(
+                keyType: String?, issuers: Array<Principal>?, socket: Socket?
+            ): String = pick((socket as? SSLSocket)?.handshakeSession)
+
+            override fun chooseEngineServerAlias(
+                keyType: String?, issuers: Array<Principal>?, engine: SSLEngine?
+            ): String = pick(engine?.handshakeSession)
+
+            override fun getServerAliases(keyType: String?, issuers: Array<Principal>?): Array<String> =
+                entries.keys.toTypedArray()
+
+            override fun getCertificateChain(alias: String?): Array<X509Certificate>? = entries[alias]?.second
+
+            override fun getPrivateKey(alias: String?): PrivateKey? = entries[alias]?.first
+
+            override fun chooseClientAlias(
+                keyType: Array<String>?, issuers: Array<Principal>?, socket: Socket?
+            ): String? = null
+
+            override fun getClientAliases(keyType: String?, issuers: Array<Principal>?): Array<String>? = null
+        }
+        return SSLContext.getInstance("TLS").apply { init(arrayOf(manager), null, null) }
     }
 
     // ---- public (Let's Encrypt) identity ----------------------------------

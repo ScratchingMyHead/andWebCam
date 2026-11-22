@@ -180,10 +180,15 @@ class CamService : Service(), HttpServer.Host {
                 scheduleCameraRetry()
             },
         )
-        server = HttpServer(this, hub, this)
-        // Certificate renewal runs in the background; when it installs a new
-        // chain the public listener must be rebuilt to pick it up.
-        Acme.start(this) { mainHandler.post { restartPublicServer() } }
+        server = HttpServer(this, hub, this, Tls.dualSslContext(this))
+        // Certificate renewal runs in the background; rebuilding the
+        // listeners makes both pick up the new chain.
+        Acme.start(this) {
+            mainHandler.post {
+                restartMainServer()
+                restartPublicServer()
+            }
+        }
         configureRing()
         mainHandler.postDelayed({ configureRing() }, 3000)
         ensureChannel()
@@ -371,6 +376,13 @@ class CamService : Service(), HttpServer.Host {
         restartPublicServer()
         restartChallengeServer()
         restartMdns()
+    }
+
+    private fun restartMainServer() {
+        val wasRunning = server.isRunning
+        server.stop()
+        server = HttpServer(this, hub, this, Tls.dualSslContext(this))
+        if (wasRunning) server.start(Prefs.port)
     }
 
     private fun restartPublicServer() {
