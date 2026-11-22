@@ -1590,7 +1590,9 @@ function paintRange(r, level) {
   var fill = r.querySelector('.zfill');
   fill.style.width = Math.max(r._level, 2) + '%';
   fill.style.background = firing ? '#e53935' : '#2b6cb0';
-  r.querySelector('.zlevel').style.left = r._level + '%';
+  var mark = r.querySelector('.zlevel');
+  mark.style.left = r._level + '%';
+  mark.style.display = r._level < 1 ? 'none' : '';
   r.querySelector('.zlo').style.left = r._lo + '%';
   r.querySelector('.zhi').style.left = r._hi + '%';
 }
