@@ -64,12 +64,15 @@ The **Public proxy** section has three further settings:
 
 ### Public proxy
 
-The phone makes an **outbound** HTTPS connection, so no inbound ports or port
-forwarding are needed and the camera works behind CGNAT. Apache on the public
-host terminates TLS for a wildcard subdomain and forwards requests to a small
-relay daemon on loopback. The relay asks the phone to replay each request
-against the phone's own local web server and streams the response back. The
-whole UI is available remotely, not just the video.
+andWebCam is able to make an **outbound** HTTPS connection, so no inbound ports
+or port forwarding are needed and the camera works behind CGNAT. However, this
+requires an external Apache server, so forwarding a port to the phone is
+preferable if that option is available.
+
+Apache on the public host terminates TLS for a wildcard subdomain and forwards
+requests to a small relay daemon on loopback. The relay asks the phone to replay
+each request against the phone's own local web server and streams the response
+back. The whole UI is available remotely, not just the video.
 
 Each camera has its own hostname: `cam2.yourhost.com` maps to camera ID `cam2`,
 and a single wildcard Apache vhost serves all cameras. When the phone is
