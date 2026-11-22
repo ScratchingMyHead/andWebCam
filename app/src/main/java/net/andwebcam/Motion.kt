@@ -35,6 +35,7 @@ class Motion {
         private const val FIRST_SIGHT_LEVEL = 10    // big enough to draw on first sighting
         private const val UNCONFIRMED_MS = 600L     // a one-tick track is short-lived
         private const val TRACK_MS = 1500L          // confirmed tracks linger a little
+        private const val DUPLICATE_MS = 500L       // ignore overlaps of a fresh track
     }
 
     /** A parsed zone with its live state. */
@@ -426,6 +427,10 @@ class Motion {
         }
         for (i in cand.indices) if (!matched[i]) {
             val c = cand[i]
+            // One car often produces several blobs. If a new candidate sits
+            // on top of one seen in the last half second, it is a fragment,
+            // not another object.
+            if (tracks.any { overlapsFreshTrack(it, c, now) }) continue
             tracks.add(Track(c.x, c.y, c.w, c.h, c.level, nextTrackId++))
         }
         // An object seen on only one tick is probably real but unproven, so it
@@ -555,6 +560,20 @@ class Motion {
         val bx = b.x + b.w / 2f
         val by = b.y + b.h / 2f
         return kotlin.math.sqrt((ax - bx) * (ax - bx) + (ay - by) * (ay - by))
+    }
+
+    /** Is a new candidate a fragment sitting on top of a freshly seen object? */
+    private fun overlapsFreshTrack(track: Track, c: Detection, now: Long): Boolean {
+        if (now - track.seen > DUPLICATE_MS) return false
+        val x1 = maxOf(track.x, c.x); val y1 = maxOf(track.y, c.y)
+        val x2 = minOf(track.x + track.w, c.x + c.w)
+        val y2 = minOf(track.y + track.h, c.y + c.h)
+        if (x2 <= x1 || y2 <= y1) return false
+        val overlap = (x2 - x1) * (y2 - y1)
+        if (overlap >= c.w * c.h * 0.5f) return true
+        val cx = c.x + c.w / 2f
+        val cy = c.y + c.h / 2f
+        return cx in track.x..(track.x + track.w) && cy in track.y..(track.y + track.h)
     }
 
     /** Centroid or a corner inside the polygon is enough to count as inside. */
