@@ -427,9 +427,12 @@ class Motion {
         }
         for (i in cand.indices) if (!matched[i]) {
             val c = cand[i]
-            // One car often produces several blobs. If a new candidate sits
-            // on top of one seen in the last half second, it is a fragment,
-            // not another object.
+            // One car often produces several blobs. Ignore a second candidate
+            // that touches one already assigned to a track this tick, or a
+            // track seen in the last half second. Comparing against the other
+            // detections as well as the tracks catches fragments whose boxes
+            // only just overlap while the smoothed track box still lags.
+            if ((0 until i).any { matched[it] && boxesIntersect(cand[it], c) }) continue
             if (tracks.any { overlapsFreshTrack(it, c, now) }) continue
             tracks.add(Track(c.x, c.y, c.w, c.h, c.level, nextTrackId++))
         }
@@ -491,7 +494,7 @@ class Motion {
                 }
                 if (rejected.isNotEmpty()) {
                     if (rejectInfo.isNotEmpty()) rejectInfo.append(' ')
-                    rejectInfo.append("z${index + 1}$rejected$biggest")
+                    rejectInfo.append("z${index + 1} $biggest$rejected")
                 }
                 if (levels.isNotEmpty()) levels.append(' ')
                 levels.append("z${index + 1}=$biggest")
@@ -565,16 +568,17 @@ class Motion {
     /** Is a new candidate a fragment sitting on top of a freshly seen object? */
     private fun overlapsFreshTrack(track: Track, c: Detection, now: Long): Boolean {
         if (now - track.seen > DUPLICATE_MS) return false
-        val x1 = maxOf(track.x, c.x); val y1 = maxOf(track.y, c.y)
-        val x2 = minOf(track.x + track.w, c.x + c.w)
-        val y2 = minOf(track.y + track.h, c.y + c.h)
-        if (x2 <= x1 || y2 <= y1) return false
-        val overlap = (x2 - x1) * (y2 - y1)
-        if (overlap >= c.w * c.h * 0.5f) return true
-        val cx = c.x + c.w / 2f
-        val cy = c.y + c.h / 2f
-        return cx in track.x..(track.x + track.w) && cy in track.y..(track.y + track.h)
+        return boxesIntersect(track.x, track.y, track.w, track.h, c.x, c.y, c.w, c.h)
     }
+
+    /** Any shared area counts: fragments of one object tend to just touch. */
+    private fun boxesIntersect(a: Detection, b: Detection): Boolean =
+        boxesIntersect(a.x, a.y, a.w, a.h, b.x, b.y, b.w, b.h)
+
+    private fun boxesIntersect(
+        ax: Float, ay: Float, aw: Float, ah: Float,
+        bx: Float, by: Float, bw: Float, bh: Float,
+    ): Boolean = ax < bx + bw && bx < ax + aw && ay < by + bh && by < ay + ah
 
     /** Centroid or a corner inside the polygon is enough to count as inside. */
     private fun overlapsZone(t: Track, points: List<Pair<Double, Double>>): Boolean {
