@@ -450,7 +450,9 @@ class Motion {
                 for (track in visible) {
                     if (!overlapsZone(track, zone.points)) continue
                     if (track.level > biggest) biggest = track.level
-                    val fits = track.level >= zone.sensitivity && track.level <= zone.max
+                    // Levels stop at 100, so max 100 means no upper bound.
+                    val fits = track.level >= zone.sensitivity &&
+                        (zone.max >= 100 || track.level <= zone.max)
                     if (fits && track.level > acceptable) acceptable = track.level
                     if (track.zone == 0) {
                         track.zone = index + 1

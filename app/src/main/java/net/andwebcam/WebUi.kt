@@ -91,9 +91,11 @@ object WebUi {
  .zrange .ztrack { right:0; background:#243038 }
  .zrange .zfill { background:#2b6cb0 }
  .zrange .zlevel { position:absolute; top:3px; width:2px; height:16px; margin-left:-1px; background:#fff; opacity:.75 }
- .zrange .zthumb { position:absolute; top:1px; width:14px; height:20px; margin-left:-7px; border-radius:7px; background:#cfd8dc; cursor:ew-resize; box-shadow:0 0 0 1px #111 }
+ .zrange .zthumb { position:absolute; top:1px; width:16px; height:20px; margin-left:-8px; border-radius:8px; background:#cfd8dc; cursor:ew-resize; box-shadow:0 0 0 1px #111; display:flex; align-items:center; justify-content:center; font-size:10px; font-weight:600; letter-spacing:-.5px; color:#111; user-select:none; -webkit-user-select:none }
+ .zrange .zthumb::after { content: attr(data-val) }
  .zrange .zhi { background:#9aa9b3 }
  .zrange .zhi.hidden { display:none }
+ .zrange .zhi.unlimited::after { font-size:12px }
  .zrange .zlo { z-index:2 }
  .zrow { margin:7px 0 }
  .zhdr { margin:6px 0 2px; font-size:11px; color:#889 }
@@ -1565,8 +1567,9 @@ function zoneRange(z) {
     '<div class="zlevel"></div><div class="zlo zthumb"></div><div class="zhi zthumb"></div>';
   r.addEventListener('pointerdown', function(e) {
     if (e.button !== 0) { return; }
-    var which = e.target.classList.contains('zhi') ? 'hi' :
-      (e.target.classList.contains('zlo') ? 'lo' : null);
+    var thumb = e.target.closest ? e.target.closest('.zthumb') : null;
+    var which = thumb && thumb.classList.contains('zhi') ? 'hi' :
+      (thumb && thumb.classList.contains('zlo') ? 'lo' : null);
     if (!which) {
       var v = rangePos(r, e);
       which = Math.abs(v - r._lo) <= Math.abs(v - r._hi) ? 'lo' : 'hi';
@@ -1586,15 +1589,25 @@ function rangePos(r, e) {
 
 function paintRange(r, level) {
   r._level = level || 0;
-  var firing = r._level >= Math.max(1, r._lo) && r._level <= r._hi;
+  // 100 is not a real ceiling: levels stop at 100, so an upper bound of 100
+  // means none at all. The dark handle is dimmed to say so.
+  var unlimited = r._hi >= 100;
+  var firing = r._level >= Math.max(1, r._lo) && (unlimited || r._level <= r._hi);
   var fill = r.querySelector('.zfill');
   fill.style.width = Math.max(r._level, 2) + '%';
   fill.style.background = firing ? '#e53935' : '#2b6cb0';
   var mark = r.querySelector('.zlevel');
   mark.style.left = r._level + '%';
   mark.style.display = r._level < 1 ? 'none' : '';
-  r.querySelector('.zlo').style.left = r._lo + '%';
-  r.querySelector('.zhi').style.left = r._hi + '%';
+  var lo = r.querySelector('.zlo');
+  lo.style.left = r._lo + '%';
+  lo.dataset.val = String(Math.round(r._lo));
+  var hi = r.querySelector('.zhi');
+  hi.style.left = r._hi + '%';
+  // A maximum of 100 is not a real ceiling: levels stop at 100, so the
+  // handle shows an infinity sign rather than "100".
+  hi.dataset.val = unlimited ? '\u221e' : String(Math.round(r._hi));
+  hi.classList.toggle('unlimited', unlimited);
 }
 
 document.addEventListener('pointermove', function(e) {
