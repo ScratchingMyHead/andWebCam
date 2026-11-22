@@ -31,6 +31,9 @@ object Prefs {
     private const val KEY_ZOOM = "zoom"
     private const val KEY_ORIENTATION = "orientation"
     private const val KEY_ANON_VIEW = "anon_view"
+    private const val KEY_PUBLIC_FEED_URL = "public_feed_url"
+    private const val KEY_PUBLIC_FEED_TOKEN = "public_feed_token"
+    private const val KEY_VIEWER_PASSWORD = "viewer_password"
     private const val KEY_MDNS = "mdns_enabled"
     private const val KEY_AUTO_START_STREAM = "auto_start_stream"
     private const val KEY_ENABLED = "enabled"
@@ -77,7 +80,15 @@ object Prefs {
             sp = ctx.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
             ensureAdminPassword()
             ensureAdminPath()
+            ensurePublicFeedToken()
         }
+    }
+
+    private fun ensurePublicFeedToken() {
+        if (sp.getString(KEY_PUBLIC_FEED_TOKEN, "")!!.isNotBlank()) return
+        val bytes = ByteArray(16)
+        rng.nextBytes(bytes)
+        sp.edit().putString(KEY_PUBLIC_FEED_TOKEN, bytes.joinToString("") { "%02x".format(it) }).apply()
     }
 
     private fun ensureAdminPassword() {
@@ -193,6 +204,24 @@ object Prefs {
     var anonView: Boolean
         get() = sp.getBoolean(KEY_ANON_VIEW, false)
         set(v) = edit { putBoolean(KEY_ANON_VIEW, v) }
+
+    /**
+     * Outbound public feed. The URL is the public page path, e.g.
+     * "https://offloop.net/cam/cam2"; blank disables the feed. The token
+     * authenticates this phone to the relay; the viewing password protects
+     * the public page, and blank means no password.
+     */
+    var publicFeedUrl: String
+        get() = sp.getString(KEY_PUBLIC_FEED_URL, "")!!.trim()
+        set(v) = edit { putString(KEY_PUBLIC_FEED_URL, v.trim()) }
+
+    var publicFeedToken: String
+        get() = sp.getString(KEY_PUBLIC_FEED_TOKEN, "")!!.trim()
+        set(v) = edit { putString(KEY_PUBLIC_FEED_TOKEN, v.trim()) }
+
+    var viewerPassword: String
+        get() = sp.getString(KEY_VIEWER_PASSWORD, "")!!
+        set(v) = edit { putString(KEY_VIEWER_PASSWORD, v) }
 
     /** Whether streaming is enabled automatically when the service starts. */
     var autoStartStreaming: Boolean

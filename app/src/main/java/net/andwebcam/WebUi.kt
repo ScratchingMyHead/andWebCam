@@ -248,6 +248,23 @@ object WebUi {
       </div>
 
       <details class="certbox">
+        <summary>Public proxy</summary>
+        <div class="row">
+          <label>Public URL (blank disables)</label>
+          <input id="s_puburl" type="text" spellcheck="false" placeholder="https://cam2.offloop.net/">
+        </div>
+        <div class="row">
+          <label>Proxy token</label>
+          <input id="s_pubtoken" type="password" autocomplete="off" spellcheck="false">
+        </div>
+        <div class="row">
+          <label>Viewing password (blank = none)</label>
+          <input id="s_pubpass" type="password" autocomplete="off" spellcheck="false">
+        </div>
+        <p class="hint" id="v_pubstatus"></p>
+      </details>
+
+      <details class="certbox">
         <summary>Public certificate</summary>
         <div class="row"><label class="check"><input id="s_cenable" type="checkbox"> Let's Encrypt certificate</label></div>
         <div class="row"><label class="check"><input id="s_ddnsenable" type="checkbox"> DuckDNS address updates</label></div>
@@ -812,6 +829,13 @@ function refresh() {
     if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
     if (document.activeElement !== el('s_mdns')) { el('s_mdns').checked = s.mdnsEnabled !== false; }
     if (document.activeElement !== el('s_adminpath')) { el('s_adminpath').value = s.adminPath || ''; }
+    var pf = s.publicFeed || {};
+    if (document.activeElement !== el('s_puburl')) { el('s_puburl').value = pf.url || ''; }
+    if (document.activeElement !== el('s_pubtoken')) { el('s_pubtoken').value = pf.token || ''; }
+    if (document.activeElement !== el('s_pubpass')) { el('s_pubpass').value = pf.viewerPassword || ''; }
+    el('v_pubstatus').textContent = !pf.url ? 'Disabled.' :
+      (pf.connected ? ('Connected as ' + (pf.id || 'guest') + '.') :
+        ('Not connected' + (pf.error ? ': ' + pf.error : '') + '.'));
     updateCert(s.cert || {});
   }).catch(function() {
     el('i_state').textContent = 'unreachable';
@@ -865,6 +889,9 @@ el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
 el('s_mdns').onchange = function() { setSetting('mdnsEnabled', this.checked); };
 el('s_adminpath').onchange = function() { setSetting('adminPath', this.value); };
+el('s_puburl').onchange = function() { setSetting('publicFeedUrl', this.value); };
+el('s_pubtoken').onchange = function() { setSetting('publicFeedToken', this.value); };
+el('s_pubpass').onchange = function() { setSetting('viewerPassword', this.value); };
 function certToggle(key, value) {
   var o = {}; o[key] = value;
   post('/api/cert/save', o).then(function() { setTimeout(refresh, 300); });

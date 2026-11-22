@@ -82,6 +82,7 @@ class CamService : Service(), HttpServer.Host {
     private val ring = VideoRing()
     private val recorder = Recorder(this)
     private val motion = Motion()
+    private val publicFeed = PublicFeed()
 
     /** True while the running recording was started by motion, not by hand. */
     private var motionOwned = false
@@ -104,7 +105,7 @@ class CamService : Service(), HttpServer.Host {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val cameraRetry = Runnable {
         if (started && (recorder.recording || motion.enabled || motion.previewing() ||
-                (streamingEnabled && hub.count > 0))) camera.start()
+                publicFeed.isEnabled() || (streamingEnabled && hub.count > 0))) camera.start()
     }
     /**
      * Close the camera and end the ring's run of frames. The pre-roll must
@@ -117,7 +118,8 @@ class CamService : Service(), HttpServer.Host {
     }
 
     private val idleStop = Runnable {
-        if (started && hub.count == 0 && !recorder.recording && !motion.enabled && !motion.previewing()) {
+        if (started && hub.count == 0 && !recorder.recording && !motion.enabled &&
+            !motion.previewing() && !publicFeed.isEnabled()) {
             Log.i(TAG, "no viewers; closing camera to save power")
             closeCamera()
             updateNotification()
@@ -130,8 +132,8 @@ class CamService : Service(), HttpServer.Host {
      */
     private val previewTimeout = Runnable {
         if (started && !motion.previewing()) {
-            updateLocks(hub.count > 0 || motion.enabled)
-            if (hub.count == 0 && !recorder.recording && !motion.enabled) {
+            updateLocks(hub.count > 0 || motion.enabled || publicFeed.isEnabled())
+            if (hub.count == 0 && !recorder.recording && !motion.enabled && !publicFeed.isEnabled()) {
                 Log.i(TAG, "motion pane closed; closing camera")
                 closeCamera()
             }
@@ -144,6 +146,7 @@ class CamService : Service(), HttpServer.Host {
     override fun onCreate() {
         super.onCreate()
         Prefs.init(this)
+        publicFeed.configure(Prefs.publicFeedUrl, Prefs.publicFeedToken, Prefs.viewerPassword)
         hub = StreamHub()
         scaler = StreamScaler({ jpeg -> hub.broadcast(jpeg) }, { hub.count > 0 })
         recorder.ringRef = ring
@@ -156,7 +159,7 @@ class CamService : Service(), HttpServer.Host {
                 if (hub.count == 0) {
                     if (streamingEnabled) {
                         mainHandler.postDelayed(idleStop, 5000)
-                    } else if (camera.active && !motion.enabled) {
+                    } else if (camera.active && !motion.enabled && !publicFeed.isEnabled()) {
                         Log.i(TAG, "recording finished and no viewers; closing camera")
                         closeCamera()
                     }
@@ -269,7 +272,7 @@ class CamService : Service(), HttpServer.Host {
             updateNotification()
             return
         }
-        updateLocks(false)          // start asleep: only the multicast lock
+        updateLocks(publicFeed.isEnabled())   // start asleep unless a public feed is configured
         State.serviceName = Prefs.serviceName
         State.port = Prefs.port
         State.ip = localIp()
@@ -316,7 +319,7 @@ class CamService : Service(), HttpServer.Host {
             // the service has to be doing something.
             mainHandler.post {
                 if (!camera.active) camera.start()
-                updateLocks(hub.count > 0 || motion.enabled)
+                updateLocks(hub.count > 0 || motion.enabled || publicFeed.isEnabled())
                 updateNotification()
             }
         }
@@ -589,7 +592,7 @@ class CamService : Service(), HttpServer.Host {
         mainHandler.post {
             if (!started) return@post
             mainHandler.removeCallbacks(idleStop)
-            updateLocks(count > 0 || motion.enabled)
+            updateLocks(count > 0 || motion.enabled || publicFeed.isEnabled())
             if (count > 0) {
                 if (streamingEnabled && !camera.active) {
                     Log.i(TAG, "viewer connected; opening camera")
@@ -613,9 +616,9 @@ class CamService : Service(), HttpServer.Host {
             // The webcam is off, so it stops recording too; the file is
             // finished first, and the camera stays open only for motion.
             if (recorder.recording) recorder.stop()
-            else if (!motion.enabled) closeCamera()
+            else if (!motion.enabled && !publicFeed.isEnabled()) closeCamera()
         }
-        updateLocks(hub.count > 0 || motion.enabled)
+        updateLocks(hub.count > 0 || motion.enabled || publicFeed.isEnabled())
         updateNotification()
     }
 
@@ -628,6 +631,7 @@ class CamService : Service(), HttpServer.Host {
         mainHandler.removeCallbacks(idleStop)
         mainHandler.removeCallbacks(refreshNet)
         hub.disconnectAll()
+        publicFeed.shutdown()
         mdns?.stop()
         mdns = null
         unwatchNetwork()
@@ -695,6 +699,15 @@ class CamService : Service(), HttpServer.Host {
             "motionDiag" to motion.diagnostics(),
             "autoStartStreaming" to Prefs.autoStartStreaming,
             "mdnsEnabled" to Prefs.mdnsEnabled,
+            "publicFeed" to mapOf(
+                "url" to Prefs.publicFeedUrl,
+                "token" to Prefs.publicFeedToken,
+                "viewerPassword" to Prefs.viewerPassword,
+                "enabled" to publicFeed.isEnabled(),
+                "connected" to publicFeed.isConnected(),
+                "id" to publicFeed.cameraId(),
+                "error" to publicFeed.error(),
+            ),
             "lastError" to State.lastError,
             // The folder holding the on-disk copy of the log; null while none
             // has been chosen. The page shows it and offers the picker.
@@ -735,6 +748,18 @@ class CamService : Service(), HttpServer.Host {
                 "motionLightGate" -> motion.setLightGate(v.toBoolean())
                 "mdnsEnabled" -> if (Prefs.mdnsEnabled != v.toBoolean()) {
                     Prefs.mdnsEnabled = v.toBoolean(); restartMdns = true
+                }
+                "publicFeedUrl" -> {
+                    Prefs.publicFeedUrl = v
+                    publicFeed.configure(v, Prefs.publicFeedToken, Prefs.viewerPassword)
+                }
+                "publicFeedToken" -> {
+                    Prefs.publicFeedToken = v
+                    publicFeed.configure(Prefs.publicFeedUrl, v, Prefs.viewerPassword)
+                }
+                "viewerPassword" -> {
+                    Prefs.viewerPassword = v
+                    publicFeed.configure(Prefs.publicFeedUrl, Prefs.publicFeedToken, v)
                 }
             }
         }
@@ -875,7 +900,7 @@ class CamService : Service(), HttpServer.Host {
         if (err == null) {
             mainHandler.post {
                 if (motion.enabled && !camera.active) camera.start()
-                updateLocks(hub.count > 0 || motion.enabled)
+                updateLocks(hub.count > 0 || motion.enabled || publicFeed.isEnabled())
                 updateNotification()
             }
         }

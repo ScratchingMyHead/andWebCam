@@ -54,6 +54,39 @@ Most camera settings apply as soon as they are changed.
 | Allow anonymous view-only access | Off | Lets anyone on the LAN watch the stream and read status without logging in. All controls remain admin-only. |
 | Admin page path | Random on first run | 1–32 lowercase letters, digits or hyphens. A blank value puts the admin UI at `/` and disables the public viewer. Changing it changes the URL used to reach the admin page. |
 
+The **Public proxy** section has three further settings:
+
+| Setting | Default | What it does |
+| --- | --- | --- |
+| Public URL | Empty | The public address of this camera, e.g. `https://cam2.offloop.net/`. Blank disables the proxy. |
+| Proxy token | Generated on first run | Shared secret sent to the relay. Copy it into the relay's token file; the relay rejects a different token. |
+| Viewing password | Empty | If set, the relay asks for HTTP Basic auth before serving this camera. Blank means no relay-level password; the app's own admin password still applies. |
+
+### Public proxy
+
+The phone makes an **outbound** HTTPS connection, so no inbound ports or port
+forwarding are needed and the camera works behind CGNAT. Apache on the public
+host terminates TLS for a wildcard subdomain and forwards requests to a small
+relay daemon on loopback. The relay asks the phone to replay each request
+against the phone's own local web server and streams the response back. The
+whole UI is available remotely, not just the video.
+
+Each camera has its own hostname: `cam2.offloop.net` maps to camera ID `cam2`,
+and a single wildcard Apache vhost serves all cameras. When the phone is
+offline the relay serves a short "Camera offline" page with a five-second
+refresh. While the proxy is enabled the camera stays open; no data is sent
+until a browser connects through it.
+
+The relay lives in `tools/camrelay` in the source tree and has its own README
+covering the Apache configuration, the systemd unit and the wire protocol. The
+wildcard certificate uses Let's Encrypt DNS-01 and must be renewed with the
+same certbot command — automatic renewal needs a DNS provider plugin and an
+auth hook.
+
+As with any remote admin access, use a strong admin password and keep the
+proxy token private. The relay adds an optional viewing password in front of
+the whole site; the app's own login remains the second layer.
+
 ### Service
 
 These take effect when **Apply service settings** is pressed.

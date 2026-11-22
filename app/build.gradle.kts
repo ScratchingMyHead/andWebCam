@@ -101,8 +101,8 @@ android {
         jvmTarget = "17"
     }
 
-    // No AndroidX and no other dependencies: OpenCV is the one exception,
-    // loaded only when the user selects the object detector.
+    // No AndroidX. The only dependencies are OpenCV (loaded when the object
+    // detector is selected) and OkHttp (the outbound feed's WebSocket client).
     dependenciesInfo {
         includeInApk = false
     }
@@ -110,4 +110,6 @@ android {
 
 dependencies {
     implementation("org.opencv:opencv:4.12.0")
+    // WebSocket client for the outbound public feed. Not AndroidX.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

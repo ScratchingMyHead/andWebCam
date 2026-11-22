@@ -1,0 +1,24 @@
+[Unit]
+Description=andWebCam camera relay (offloop)
+Documentation=file:/home/rj/src/android/andWebCam/tools/camrelay/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=util
+Group=util
+Environment=CAMRELAY_TOKEN_FILE=/etc/camrelay/token
+ExecStart=/usr/local/bin/camrelay -listen 127.0.0.1:18080
+Restart=on-failure
+RestartSec=3
+UMask=0077
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

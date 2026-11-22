@@ -20,6 +20,8 @@ entirely from a browser.
 - **Networking** — mDNS/DNS-SD discovery (`<name>.local`), optional anonymous
   view-only access, and optional Let's Encrypt certificates with DuckDNS
   address updates.
+- **Public proxy** — an outbound HTTPS connection to your own relay, so the
+  full web UI is reachable on a public subdomain even behind CGNAT.
 - **Operations** — web-based APK updates, remote log access, an on-device log
   file and crash traces, and service / phone restart controls.
 
