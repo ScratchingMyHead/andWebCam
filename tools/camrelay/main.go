@@ -212,6 +212,12 @@ func (r *relay) handleProxy(w http.ResponseWriter, req *http.Request) {
 			headers[k] = v[0]
 		}
 	}
+	// If the relay gate used its own Basic password, do not pass that header
+	// on to the app: it would be mistaken for the admin login. The app then
+	// issues its own challenge as normal.
+	if cam.password != "" {
+		delete(headers, "Authorization")
+	}
 
 	id := r.next.Add(1)
 	pr := &pendingReq{id: id, cam: cam, paired: make(chan *websocket.Conn, 1), done: make(chan struct{})}
