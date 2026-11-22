@@ -291,9 +291,10 @@ class PublicFeed {
                 ref.get()?.send("proxy error".toByteArray().toByteString())
                 ref.get()?.send(JSONObject().put("type", "end").toString())
             } catch (_: Exception) {}
-        } finally {
-            reqSocket.cancel()
         }
+        // Do not close here: the relay closes the socket after reading the
+        // final "end" message. Cancelling immediately can discard the last
+        // response frames before the relay has read them.
     }
 
     private fun gone(ws: WebSocket, reason: String) {
