@@ -98,6 +98,12 @@ class HttpServer(
         /** Motion grid cells across the long edge, 4-160. */
         fun setMotionGrid(cells: Int)
 
+        /** Ends the pane's preview lease immediately when it closes. */
+        fun setMotionPreview(on: Boolean)
+
+        /** Picks grid or OpenCV; null on success, else why OpenCV could not load. */
+        fun setMotionDetector(name: String, lightGate: Boolean?): String?
+
         /** The recordings' share of the free space, in percent. Null on success. */
         fun setRecordingCap(percent: Int): String?
 
@@ -581,6 +587,27 @@ class HttpServer(
                     val vals = parseFlatJson(String(body))
                     host.setMotionGrid((vals["grid"]?.toIntOrNull() ?: 32).coerceIn(4, 160))
                     respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                }
+            }
+
+            method == "POST" && path == "/api/motion/preview" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    host.setMotionPreview(vals["on"]?.toBoolean() ?: false)
+                    respond(output, 200, "application/json", jsonBytes(mapOf("ok" to true)))
+                }
+            }
+
+            method == "POST" && path == "/api/motion/detector" -> {
+                if (role != Role.ADMIN) unauthorized(output) else {
+                    val vals = parseFlatJson(String(body))
+                    val name = vals["detector"] ?: "grid"
+                    val gate = vals["lightGate"]?.toBoolean()
+                    val err = host.setMotionDetector(name, gate)
+                    respond(
+                        output, 200, "application/json",
+                        jsonBytes(mapOf("ok" to (err == null), "error" to err)),
+                    )
                 }
             }
 

@@ -83,7 +83,7 @@ object WebUi {
  .vrow button { padding:5px 9px; font-size:12px }
  .vrow button svg, .vrow a svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
  #zones { position:absolute; z-index:3; pointer-events:none }
- #zones polygon, #zones polyline, #zones circle, #zones text { vector-effect:non-scaling-stroke }
+ #zones polygon, #zones polyline, #zones circle, #zones rect, #zones text { vector-effect:non-scaling-stroke }
  .zslider { -webkit-appearance:none; appearance:none; width:110px; height:8px; border-radius:4px; background:#243038; outline:none; cursor:pointer }
  .zslider::-webkit-slider-thumb { -webkit-appearance:none; appearance:none; width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
  .zslider::-moz-range-thumb { width:14px; height:14px; border-radius:50%; background:#cfd8dc; border:0; cursor:pointer }
@@ -350,6 +350,16 @@ object WebUi {
       </div>
       <p class="err hidden" id="motionMsg"></p>
       <div class="row">
+        <label>Detector</label>
+        <select id="s_detector">
+          <option value="grid">Cell grid (built in)</option>
+          <option value="opencv">Object tracking (OpenCV)</option>
+        </select>
+      </div>
+      <div class="row hidden" id="lightRow">
+        <label class="check"><input id="s_lightgate" type="checkbox"> Reject lighting changes</label>
+      </div>
+      <div class="row">
         <label>Pre-roll buffer size: <span id="v_preroll">10</span> seconds</label>
         <input id="s_preroll" type="number" min="0" max="30" step="1">
       </div>
@@ -362,7 +372,7 @@ object WebUi {
         <label>Sensitivity: <span id="v_level">85</span></label>
         <input id="s_level" type="range" min="0" max="100" step="1">
       </div>
-      <div class="row">
+      <div class="row" id="gridRow">
         <label>Grid count: <span id="v_grid">32</span></label>
         <input id="s_grid" type="range" min="4" max="160" step="1">
       </div>
@@ -1096,15 +1106,20 @@ function applyPane() {
   }
   if (admin && open === 'motion') {
     if (!motionPoll) {
-      motionPoll = setInterval(motionTick, 1000);
+      motionPoll = setInterval(motionTick, 400);
       motionTick();
     }
+    previewActive = true;
     el('zones').classList.remove('hidden');
     drawZones();
   } else {
     if (motionPoll) {
       clearInterval(motionPoll);
       motionPoll = null;
+    }
+    if (previewActive) {
+      previewActive = false;
+      post('/api/motion/preview', { on: false });
     }
     el('zones').classList.add('hidden');
     if (drawing) { drawing = null; updateDrawUi(); }
@@ -1159,6 +1174,7 @@ el('l_pass').addEventListener('keydown', loginKey);
 // starts and stops it), because every poll lists the folder on the phone.
 var recPoll = null;
 var motionPoll = null;
+var previewActive = false;
 var recCount = 0;
 var recListKey = '';
 var motionDbgKey = -1;
@@ -1382,6 +1398,7 @@ function recPollTick() { recRefresh(); }
 // once a second while the pane is open, which both refreshes the zone list
 // and moves the live level fill on each slider.
 var motionData = null;
+var lastDetectorError = '';
 var drawing = null;             // points of the zone being drawn
 var zoneRowsBuiltFor = -1;
 
@@ -1398,7 +1415,9 @@ function motionMsg(text) {
 function motionTick() {
   if (!(window.S && window.S.admin)) { return; }
   if (el('motionPane').classList.contains('hidden')) { return; }
-  fetch('/api/motion/list?since=' + motionSince).then(function(r) { return r.json(); }).then(function(d) {
+  // The poll also renews the phone's preview lease, which is what lets the
+  // object boxes run with motion detection switched off.
+  fetch('/api/motion/list?since=' + motionSince + '&preview=1').then(function(r) { return r.json(); }).then(function(d) {
     motionData = d;
     motionSince = d.now || motionSince;
     var b = el('motionBtn');
@@ -1422,6 +1441,13 @@ function motionTick() {
       el('s_grid').value = d.grid || 32;
       el('v_grid').textContent = d.grid || 32;
     }
+    if (document.activeElement !== el('s_detector')) { el('s_detector').value = d.detector || 'grid'; }
+    if (document.activeElement !== el('s_lightgate')) { el('s_lightgate').checked = d.lightGate !== false; }
+    var cv = (d.detector || 'grid') === 'opencv';
+    el('gridRow').classList.toggle('hidden', cv);
+    el('lightRow').classList.toggle('hidden', !cv);
+    var derr = d.detectorError || '';
+    if (derr !== lastDetectorError) { lastDetectorError = derr; if (derr) { motionMsg(derr); } }
     drawZones();
     buildZoneList(d);
     renderMotionDebug(d.events || []);
@@ -1449,7 +1475,7 @@ function renderMotionDebug(events) {
     out += '<div class="dbgline"><span class="hi">' + tm + '</span>  ' +
       e.overall + '%  changed ' + e.changed + '/' + e.cells +
       '  shift ' + e.shift + '  peak ' + e.peak +
-      '  biggest ' + e.biggest +
+      '  biggest ' + e.biggest + '  rejected ' + (e.rejected || 0) +
       (e.zones ? '  ' + e.zones : '') + '</div>';
   }
   box.innerHTML = out;
@@ -1659,6 +1685,24 @@ el('s_grid').onchange = function() {
   post('/api/motion/grid', { grid: v });
 };
 
+el('s_detector').onchange = function() {
+  var self = this;
+  self.disabled = true;
+  post('/api/motion/detector', { detector: this.value }).then(function(r) {
+    self.disabled = false;
+    if (r.ok === false) { motionMsg(r.error || 'Could not change detector'); }
+    motionTick();
+  }).catch(function() { self.disabled = false; motionMsg('No answer from the phone.'); });
+};
+el('s_lightgate').onchange = function() {
+  post('/api/motion/detector', {
+    detector: el('s_detector').value, lightGate: this.checked,
+  }).then(function(r) {
+    if (r.ok === false) { motionMsg(r.error || 'Could not change the detector'); }
+    motionTick();
+  });
+};
+
 // The zone overlay is an SVG stretched over the picture itself, so drawing
 // and panning share one coordinate space.
 function placeZones() {
@@ -1681,7 +1725,8 @@ function centroidOf(points) {
 function drawZones() {
   var s = el('zones');
   var zones = (motionData || {}).zones || [];
-  if (!zones.length && !drawing) {
+  var boxes = (motionData || {}).boxes || [];
+  if (!zones.length && !boxes.length && !drawing) {
     s.classList.add('hidden');
     s.innerHTML = '';
     return;
@@ -1700,6 +1745,23 @@ function drawZones() {
     out.push('<text x="' + (c[0] * 1000).toFixed(0) + '" y="' + (c[1] * 1000).toFixed(0) +
       '" fill="#fff" font-size="60" text-anchor="middle" dominant-baseline="middle">' +
       z.id + '</text>');
+  });
+  // Detected objects over the whole picture: cyan outside zones, red once
+  // they move into one, and solid bright red when they also meet its minimum
+  // size. These are drawn even with motion detection switched off.
+  boxes.forEach(function(b) {
+    var x = (b.x * 1000).toFixed(1), y = (b.y * 1000).toFixed(1);
+    var w = (b.w * 1000).toFixed(1), h = (b.h * 1000).toFixed(1);
+    var color = b.firing ? '#ff1744' : (b.zone ? '#ff6b6b' : '#29b6f6');
+    var width = b.firing ? 5 : 3;
+    out.push('<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h +
+      '" fill="none" stroke="' + color + '" stroke-width="' + width + '"' +
+      (b.firing ? '' : ' stroke-dasharray="14 8"') + '/>');
+    out.push('<rect x="' + x + '" y="' + (Math.max(0, b.y * 1000 - 46)).toFixed(1) +
+      '" width="44" height="42" rx="8" fill="' + color + '"/>');
+    out.push('<text x="' + (Number(x) + 22).toFixed(1) + '" y="' +
+      (Math.max(0, b.y * 1000 - 46) + 30).toFixed(1) +
+      '" fill="#fff" font-size="38" text-anchor="middle">' + b.id + '</text>');
   });
   if (drawing && drawing.length) {
     out.push('<polyline points="' + drawing.map(function(p) {

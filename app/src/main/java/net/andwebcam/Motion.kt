@@ -4,76 +4,50 @@ import android.graphics.Bitmap
 import android.graphics.ImageDecoder
 import android.util.Log
 import java.nio.ByteBuffer
+import java.util.concurrent.atomic.AtomicReference
+import kotlin.math.max
+import kotlin.math.min
 import kotlin.math.round
 
 /**
- * Motion activation: watches the stream's own JPEG frames for objects moving
- * inside user-drawn zones, and says when a zone fires.
+ * Motion activation and the live object highlights in the motion pane.
  *
- * The analysis runs on a small greyscale copy of the frame at a fraction of
- * the stream's rate, as a pipeline:
+ * Frames from the camera thread are kept in [latest]; one analysis thread
+ * decodes the newest frame to a small greyscale image and hands it to the
+ * selected [FrameDetector]. Both detectors produce normalized object boxes;
+ * the rest - tracking across ticks, matching objects to zones, triggering
+ * recordings and feeding the pane - is shared, so switching detectors changes
+ * only how objects are found, not what a zone means.
  *
- * 1. **Cell means.** The frame is divided into a grid of square-ish cells
- *    (32 across the long edge by default) and each cell's mean luminance is
- *    taken. Averaging many pixels crushes sensor noise, which is what keeps
- *    high-ISO static out of the trigger - a blur would do the same job less
- *    well and with an extra pass.
- * 2. **Background.** Each cell keeps a running average of what it usually
- *    looks like, absorbing change over about twenty seconds: someone who
- *    stands still becomes scenery eventually, which is what lets a recording
- *    end, and slow exposure drift is not mistaken for motion.
- * 3. **Exposure correction.** The median cell change is subtracted from every
- *    cell before comparing. A camera exposure step darkens or brightens the
- *    whole frame together, so it leaves almost no residual; a white car on a
- *    dark fence does not, so it is not thrown away with the exposure change.
- *    If more than half the cells still change after that, it really is a
- *    scene cut: the background is re-seated and the tick is skipped.
- * 4. **Blobs.** Connected changed cells (8-connected) are grouped, and a
- *    blob's size in cells is the size of the object, independent of how big
- *    the zone around it is.
- *
- * A zone (a polygon in normalized coordinates) fires when it contains a blob
- * of at least the size its sensitivity asks for: sensitivity 0 accepts a
- * single cell, 100 demands the biggest object the slider scale describes
- * (about a tenth of the frame). Because the threshold is a fraction of the
- * grid, the same head triggers the same way at any grid size.
- *
- * Zones arrive as the compact string Prefs stores:
- * "aspect;sens:x,y,x,y,...;sens:...". The same per-zone state feeds the
- * page's live meters, whose scale matches the slider: the fill shows the
- * largest blob seen in the zone, and when it reaches the handle, the zone is
- * firing.
+ * Analysis runs while motion is armed **or** while the motion pane is open.
+ * The latter is a lease refreshed by the pane's poll so that boxes are drawn
+ * even with motion switched off, and so a closed browser releases the camera.
  */
 class Motion {
     companion object {
         private const val TAG = "andWebCam"
         private const val ANALYSE_EVERY_MS = 200L   // ~5 fps is plenty for motion
-        private const val GLOBAL_SKIP = 0.5         // most of the frame changing = exposure, not motion
         private const val COOLDOWN_MS = 5000L       // quiet time between triggers
         private const val HISTORY_MS = 20000L       // how far back a late poll can reach
         private const val TARGET_W = 320            // analysis frame width
-        private const val BG_RATE = 32              // background absorbs 1/32 per tick (~20 s)
-
-        /**
-         * The user's 0-100 trigger sensitivity as a cell-mean threshold in
-         * grey levels: 100 demands only 4 levels of change (very sensitive),
-         * 0 demands 44 (a spotlight on the moon). The stored default of 85
-         * sits at 10, where the fixed threshold used to be.
-         */
-        fun cellDelta(): Double = 44.0 - Prefs.motionLevel * 0.4
-
-        /**
-         * Blob size in cells that the top of the sensitivity slider asks
-         * for - about a tenth of the frame, i.e. a person at room distance.
-         * The slider maps 0-100 onto 1..this, so it keeps its meaning when
-         * the grid is made finer or coarser.
-         */
-        fun maxBlob(gw: Int, gh: Int): Int = Math.max(4, gw * gh * 60 / 576)
+        private const val PREVIEW_MS = 10_000L      // pane lease; poll refreshes it
+        private const val MIN_HITS = 2              // object must survive two ticks
     }
 
     /** A parsed zone with its live state. */
     class Zone(val sensitivity: Int, val points: List<Pair<Double, Double>>) {
-        var level = 0            // largest blob seen in the zone, on the slider's scale
+        var level = 0            // largest object seen in the zone, on the slider's scale
+    }
+
+    /** A tracked object. Boxes are normalized to the displayed frame. */
+    private class Track(
+        var x: Float, var y: Float, var w: Float, var h: Float,
+        var level: Int, val id: Int,
+    ) {
+        var hits = 1
+        var seen = System.currentTimeMillis()
+        var zone = 0
+        var firing = false
     }
 
     /** Invoked when a zone fires; argument is the zone's 1-based position. */
@@ -85,17 +59,25 @@ class Motion {
     private val zones = ArrayList<Zone>()
     private var aspect = 0.0
 
-    /** The newest frame waiting to be analysed; the camera thread only sets it. */
-    private val latest = java.util.concurrent.atomic.AtomicReference<ByteArray?>()
+    /** Newest frame; the camera thread only sets it. */
+    private val latest = AtomicReference<ByteArray?>()
 
     @Volatile private var thread: Thread? = null
 
-    /** Per-cell running background, sized to the grid of the last frame. */
-    private var cellBg: DoubleArray? = null
-    private var gridW = 0
-    private var gridH = 0
+    @Volatile private var previewUntil = 0L
 
-    /** Whether any zone is over its threshold right now. */
+    private val grid = GridDetector()
+    private var cv: CvDetector? = null
+    @Volatile private var detector: FrameDetector = grid
+    @Volatile var detectorName: String = "grid"
+        private set
+    @Volatile var detectorError: String? = null
+        private set
+
+    private val tracks = ArrayList<Track>()
+    private var nextTrackId = 1
+    @Volatile private var boxes: List<Map<String, Any>> = emptyList()
+
     @Volatile var active = false
         private set
 
@@ -109,6 +91,7 @@ class Motion {
     @Volatile private var diagPeak = 0
     @Volatile private var diagBiggest = 0
     @Volatile private var diagSkip = false
+    @Volatile private var diagRejected = 0
     private var lastDiagLog = 0L
 
     /** Recent activation events: overall level jumped by more than 2 points. */
@@ -126,6 +109,10 @@ class Motion {
         "peak" to diagPeak,
         "biggest" to diagBiggest,
         "skip" to diagSkip,
+        "rejected" to diagRejected,
+        "boxes" to boxes.size,
+        "detector" to detectorName,
+        "preview" to previewing(),
     )
 
     /** Newest activation event last; a small ring buffer for the debug pane. */
@@ -136,10 +123,25 @@ class Motion {
     /** The aspect ratio the zones were drawn for, or 0 with no zones. */
     fun zoneAspect(): Double = synchronized(zones) { aspect }
 
+    /** The current object boxes for the pane's overlay. */
+    fun boxSnapshot(): List<Map<String, Any>> = boxes
+
+    fun previewing(): Boolean = System.currentTimeMillis() < previewUntil
+
     /**
-     * A stable copy of the zone list for the page: 1-based id, sensitivity,
-     * normalized points and the live level.
+     * The motion pane keeps its analysis alive by polling. A stale lease
+     * expires on its own, so closing the tab lets the camera go to sleep.
      */
+    fun leasePreview(ms: Long = PREVIEW_MS) {
+        previewUntil = System.currentTimeMillis() + ms
+        start()
+    }
+
+    fun stopPreview() {
+        previewUntil = 0
+        if (!enabled) stop()
+    }
+
     class Snapshot(
         val id: Int,
         val sensitivity: Int,
@@ -151,7 +153,7 @@ class Motion {
     /**
      * The zone list plus, for each zone, the highest level since [since] (a
      * server timestamp the page echoes back from its previous poll). The page
-     * polls slower than the analysis runs, so this is how a spike between two
+     * polls faster than the analysis runs, so this is how a spike between two
      * polls is still delivered.
      */
     fun snapshotSince(since: Long): List<Snapshot> = synchronized(zones) {
@@ -160,15 +162,13 @@ class Motion {
             synchronized(history) {
                 for (tick in history) {
                     if (tick.t <= since) continue
-                    val n = Math.min(peaks.size, tick.levels.size)
-                    for (i in 0 until n) {
-                        if (tick.levels[i] > peaks[i]) peaks[i] = tick.levels[i]
-                    }
+                    val n = minOf(peaks.size, tick.levels.size)
+                    for (i in 0 until n) if (tick.levels[i] > peaks[i]) peaks[i] = tick.levels[i]
                 }
             }
         }
         zones.mapIndexed { i, z ->
-            val peak = if (since > 0) Math.max(peaks[i], z.level) else z.level
+            val peak = if (since > 0) maxOf(peaks[i], z.level) else z.level
             Snapshot(i + 1, z.sensitivity, z.points, z.level, peak)
         }
     }
@@ -178,6 +178,7 @@ class Motion {
     /** Load zones and the enabled flag from Prefs; called at service start. */
     fun resume() {
         load(Prefs.motionZones)
+        selectDetector(Prefs.motionDetector)
         setEnabled(Prefs.motionEnabled && Saf.tree != null)
     }
 
@@ -189,7 +190,7 @@ class Motion {
         enabled = on
         Prefs.motionEnabled = on
         Log.i(TAG, "motion activation ${if (on) "on" else "off"} with ${zoneCount()} zones")
-        if (on) start() else stop()
+        if (on) start() else if (!previewing()) stop()
         return null
     }
 
@@ -215,20 +216,50 @@ class Motion {
     /** The configured trigger sensitivity, 0-100, higher = more sensitive. */
     fun triggerLevel(): Int = Prefs.motionLevel
 
-    fun setTriggerLevel(v: Int) {
-        Prefs.motionLevel = v
-    }
+    fun setTriggerLevel(v: Int) { Prefs.motionLevel = v }
 
     /** Grid cells across the long edge, 4-160; the next tick picks it up. */
     fun gridSize(): Int = Prefs.motionGrid
 
-    fun setGrid(cells: Int) {
-        Prefs.motionGrid = cells
+    fun setGrid(cells: Int) { Prefs.motionGrid = cells }
+
+    fun setQuiet(seconds: Int) { Prefs.motionQuiet = seconds }
+
+    /**
+     * Switch analysers. OpenCV is loaded on first use, so grid-only users pay
+     * nothing at runtime; if its native library is missing we keep using the
+     * grid and report the reason in the pane.
+     */
+    fun selectDetector(name: String): String? {
+        if (name !in listOf("grid", "opencv")) return "unknown detector"
+        Prefs.motionDetector = name
+        val next: FrameDetector
+        if (name == "opencv") {
+            val c = cv ?: CvDetector().also { cv = it }
+            if (c.error != null) {
+                detector = grid
+                detectorName = "grid"
+                detectorError = c.error
+                Log.w(TAG, "OpenCV unavailable; staying on grid: ${c.error}")
+                return c.error
+            }
+            next = c
+        } else {
+            next = grid
+        }
+        // The two detectors keep independent backgrounds; a switch starts
+        // fresh so an old model cannot fire on the new detector's first frame.
+        next.reset()
+        detector = next
+        detectorName = name
+        detectorError = null
+        Log.i(TAG, "motion detector: $name")
+        return null
     }
 
-    fun setQuiet(seconds: Int) {
-        Prefs.motionQuiet = seconds
-    }
+    fun lightGate(): Boolean = Prefs.motionLightGate
+
+    fun setLightGate(on: Boolean) { Prefs.motionLightGate = on }
 
     private fun load(spec: String?) {
         synchronized(zones) {
@@ -253,20 +284,16 @@ class Motion {
 
     // ---- frame path -------------------------------------------------------
 
-    /**
-     * The camera's frame path calls this; it only remembers the newest frame
-     * and must stay cheap.
-     */
+    /** Cheap camera-thread callback: only remember the newest frame. */
     fun push(jpeg: ByteArray) {
-        if (enabled && zones.isNotEmpty()) latest.set(jpeg)
+        if (enabled || previewing()) latest.set(jpeg)
     }
 
     @Synchronized
     private fun start() {
         if (thread?.isAlive == true) return
-        cellBg = null
         thread = Thread({
-            while (enabled) {
+            while (enabled || previewing()) {
                 val jpeg = latest.getAndSet(null)
                 if (jpeg != null) {
                     try {
@@ -286,6 +313,8 @@ class Motion {
         latest.set(null)
         active = false
         lastOverall = 0
+        tracks.clear()
+        boxes = emptyList()
         synchronized(zones) { zones.forEach { it.level = 0 } }
         synchronized(history) { history.clear() }
     }
@@ -293,10 +322,8 @@ class Motion {
     // ---- the analysis -----------------------------------------------------
 
     private fun analyse(jpeg: ByteArray) {
-        // Decode straight to the size the analyser wants, whatever the camera
-        // was set to. ImageDecoder can target an arbitrary size (unlike
-        // BitmapFactory's power-of-two sampling) and honours the JPEG's EXIF
-        // orientation, so the analysis frame matches what the viewer sees.
+        // Decode straight to the size the analyser wants. ImageDecoder honours
+        // EXIF orientation, so the analysis frame matches what the viewer sees.
         var srcW = 0
         var srcH = 0
         var tw = TARGET_W
@@ -304,212 +331,150 @@ class Motion {
         val bmp = ImageDecoder.decodeBitmap(
             ImageDecoder.createSource(ByteBuffer.wrap(jpeg)),
         ) { decoder, info, _ ->
-            // ImageInfo already accounts for the JPEG's EXIF orientation, so
-            // these are the dimensions the viewer sees. No extra rotation.
             srcW = info.size.width
             srcH = info.size.height
             if (srcW >= srcH) {
                 tw = TARGET_W
-                th = Math.max(1, round(TARGET_W.toFloat() * srcH / srcW).toInt())
+                th = max(1, round(TARGET_W.toFloat() * srcH / srcW).toInt())
             } else {
                 th = TARGET_W
-                tw = Math.max(1, round(TARGET_W.toFloat() * srcW / srcH).toInt())
+                tw = max(1, round(TARGET_W.toFloat() * srcW / srcH).toInt())
             }
             decoder.setAllocator(ImageDecoder.ALLOCATOR_SOFTWARE)
             decoder.setTargetSize(tw, th)
         }
-        var w = bmp.width
-        var h = bmp.height
+        val w = bmp.width
+        val h = bmp.height
         val pixels = IntArray(w * h)
         bmp.getPixels(pixels, 0, w, 0, 0, w, h)
-        bmp.recycle()
         val sig = "$srcW x $srcH -> $tw x $th"
         if (sig != lastDecodeSig) {
             lastDecodeSig = sig
             Log.i(TAG, "motion decode: $sig (got ${w}x${h})")
         }
 
-        // Luma only. ImageDecoder has already applied the JPEG's EXIF
-        // orientation, so no further rotation is needed here.
-        var grey = ByteArray(w * h)
+        val grey = ByteArray(w * h)
         for (i in pixels.indices) {
             val v = pixels[i]
             grey[i] = (((v shr 16 and 0xFF) * 66 + (v shr 8 and 0xFF) * 129 + (v and 0xFF) * 25) shr 8).toByte()
         }
-        // The grid follows the user's setting, keeping cells roughly square
-        // and the cell count along the long edge fixed.
-        val cells = Prefs.motionGrid.coerceIn(4, 160)
-        val gw: Int
-        val gh: Int
-        if (w >= h) {
-            gw = cells
-            gh = Math.max(2, Math.round(cells * h.toFloat() / w))
-        } else {
-            gh = cells
-            gw = Math.max(2, Math.round(cells * w.toFloat() / h))
-        }
-        var means = DoubleArray(gw * gh)
-        val counts = IntArray(gw * gh)
-        for (y in 0 until h) {
-            val cy = Math.min(gh - 1, y * gh / h)
-            val row = cy * gw
-            for (x in 0 until w) {
-                val c = row + Math.min(gw - 1, x * gw / w)
-                val g = grey[y * w + x].toInt() and 0xFF
-                means[c] = means[c] + g
-                counts[c]++
-            }
-        }
-        for (c in means.indices) {
-            if (counts[c] > 0) {
-                means[c] = means[c] / counts[c]
-            }
+        // OpenCV needs the bitmap itself; the grid works from the grey bytes.
+        val result = try {
+            detector.analyse(bmp, grey, w, h, Prefs.motionLevel)
+        } finally {
+            bmp.recycle()
         }
 
-        var bg = cellBg
-        if (bg == null || gridW != gw || gridH != gh || bg.size != means.size) {
-            cellBg = means          // first frame, or the frame shape moved
-            gridW = gw
-            gridH = gh
-            return
-        }
-
-        // Change is measured against the running background, with the median
-        // change of the whole frame removed. That median is the camera's
-        // exposure moving (a bright car makes the AE darken everything a
-        // little): it is scenery-wide, so subtracting it keeps a car from
-        // taking the whole tick with it.
-        val changed = BooleanArray(means.size)
-        val deltas = DoubleArray(means.size)
-        for (c in means.indices) deltas[c] = means[c] - bg[c]
-        val sorted = deltas.copyOf()
-        sorted.sort()
-        val median = if (sorted.size % 2 == 1) {
-            sorted[sorted.size / 2]
-        } else {
-            (sorted[sorted.size / 2 - 1] + sorted[sorted.size / 2]) / 2.0
-        }
-        var changedCount = 0
-        var peak = 0.0
-        for (c in means.indices) {
-            val d = Math.abs(deltas[c] - median)
-            if (d > peak) peak = d
-            changed[c] = d > cellDelta()
-            if (changed[c]) changedCount++
-        }
-
-        // Even after the exposure correction, most of the frame changing is
-        // a scene cut rather than motion: re-seat the background and skip.
-        if (changedCount > means.size * GLOBAL_SKIP) {
-            cellBg = means.copyOf()
-            active = false
+        if (result.skip) {
+            tracks.clear()
+            boxes = emptyList()
             synchronized(zones) { zones.forEach { it.level = 0 } }
+            active = false
             lastOverall = 0
-            record(changedCount, means.size, median, peak, 0, true, "")
+            record(result, 0, true)
             return
         }
 
-        // Scenery absorbs slowly, wherever it came from: a person who stands
-        // still becomes background in about twenty seconds, which is what
-        // lets a recording end.
-        for (c in bg.indices) {
-            bg[c] += (means[c] - bg[c]) / BG_RATE
-        }
-
-        // Blobs of connected changed cells (8-connected).
-        val blobOf = IntArray(means.size) { -1 }
-        val blobSizes = ArrayList<Int>()
-        for (start in means.indices) {
-            if (!changed[start] || blobOf[start] >= 0) continue
-            val id = blobSizes.size
-            var size = 0
-            val stack = ArrayDeque<Int>()
-            stack.add(start)
-            blobOf[start] = id
-            while (stack.isNotEmpty()) {
-                val c = stack.removeLast()
-                size++
-                val cx = c % gw
-                val cy = c / gw
-                for (dy in -1..1) for (dx in -1..1) {
-                    if (dx == 0 && dy == 0) continue
-                    val nx = cx + dx
-                    val ny = cy + dy
-                    if (nx < 0 || ny < 0 || nx >= gw || ny >= gh) continue
-                    val n = ny * gw + nx
-                    if (changed[n] && blobOf[n] < 0) {
-                        blobOf[n] = id
-                        stack.add(n)
-                    }
-                }
+        // Track objects between ticks. A light sweep or a single noisy frame
+        // never reaches two hits; a real object keeps its box and gets an id,
+        // which also makes the pane's highlights stay still.
+        val cand = result.candidates
+        val matched = BooleanArray(cand.size)
+        val now = System.currentTimeMillis()
+        for (track in tracks) {
+            var best = -1
+            var bestIou = 0f
+            for (i in cand.indices) {
+                if (matched[i]) continue
+                val c = cand[i]
+                val iou = overlap(track, c)
+                if (iou > bestIou) { bestIou = iou; best = i }
             }
-            blobSizes.add(size)
+            if (best >= 0 && bestIou > 0.2f) {
+                val c = cand[best]
+                matched[best] = true
+                track.x += (c.x - track.x) * 0.5f
+                track.y += (c.y - track.y) * 0.5f
+                track.w += (c.w - track.w) * 0.5f
+                track.h += (c.h - track.h) * 0.5f
+                track.level = c.level
+                track.hits++
+                track.seen = now
+            }
         }
+        for (i in cand.indices) if (!matched[i]) {
+            val c = cand[i]
+            tracks.add(Track(c.x, c.y, c.w, c.h, c.level, nextTrackId++))
+        }
+        tracks.removeAll { now - it.seen > 1500 }
+        while (tracks.size > 16) tracks.removeAt(0)
+        val visible = tracks.filter { it.hits >= MIN_HITS }
 
-        // A blob belongs to a zone when any of its cells' centres is inside
-        // the zone's polygon; the zone's level is its biggest such blob.
         var nowActive = false
         val fired = ArrayList<Int>()
-        val mb = maxBlob(gw, gh)
         var biggestAny = 0
         var overall = 0
         val levels = StringBuilder()
-        val tickNow = System.currentTimeMillis()
-        var tickLevels: IntArray
+        val tickLevels = IntArray(zones.size)
+        for (track in tracks) { track.zone = 0; track.firing = false }
         synchronized(zones) {
-            tickLevels = IntArray(zones.size)
             for ((index, zone) in zones.withIndex()) {
                 var biggest = 0
-                for ((id, size) in blobSizes.withIndex()) {
-                    if (size <= biggest) continue
-                    for (c in 0 until means.size) {
-                        if (blobOf[c] != id) continue
-                        if (inside(zone.points, (c % gw + 0.5) / gw, (c / gw + 0.5) / gh)) {
-                            biggest = size
-                            break
-                        }
+                for (track in visible) {
+                    if (!overlapsZone(track, zone.points)) continue
+                    if (track.level > biggest) biggest = track.level
+                    if (track.level >= zone.sensitivity && track.zone == 0) {
+                        track.zone = index + 1
+                        track.firing = true
+                    } else if (track.zone == 0) {
+                        track.zone = index + 1
                     }
                 }
                 if (biggest > biggestAny) biggestAny = biggest
-                // Slider scale: level is the sensitivity that would fire on
-                // this blob, so the fill reaching the handle means firing.
-                zone.level = ((biggest * 100) / mb).coerceIn(0, 100)
-                tickLevels[index] = zone.level
-                if (zone.level > overall) overall = zone.level
-                val need = 1 + (zone.sensitivity * (mb - 1)) / 100
+                zone.level = biggest
+                tickLevels[index] = biggest
+                if (biggest > overall) overall = biggest
                 if (levels.isNotEmpty()) levels.append(' ')
                 levels.append("z${index + 1}=$biggest")
-                if (biggest >= need) {
+                if (enabled && biggest >= zone.sensitivity) {
                     nowActive = true
-                    if (tickNow - lastTrigger > COOLDOWN_MS) {
-                        lastTrigger = tickNow
+                    if (now - lastTrigger > COOLDOWN_MS) {
+                        lastTrigger = now
                         fired.add(index + 1)
                     }
                 }
             }
         }
         synchronized(history) {
-            history.addLast(Tick(tickNow, tickLevels))
-            while (history.isNotEmpty() && tickNow - history.first().t > HISTORY_MS) {
-                history.removeFirst()
-            }
+            history.addLast(Tick(now, tickLevels))
+            while (history.isNotEmpty() && now - history.first().t > HISTORY_MS) history.removeFirst()
         }
         active = nowActive
-        record(changedCount, means.size, median, peak, biggestAny, false, levels.toString())
-        // The user watches the strongest zone's level. A rise of more than
-        // two points is worth a debug line: it is an object appearing or
-        // growing, not noise hovering around zero.
+        boxes = visible.map { t ->
+            mapOf(
+                "x" to round(t.x * 1000) / 1000f,
+                "y" to round(t.y * 1000) / 1000f,
+                "w" to round(t.w * 1000) / 1000f,
+                "h" to round(t.h * 1000) / 1000f,
+                "id" to t.id,
+                "level" to t.level,
+                "zone" to t.zone,
+                "firing" to t.firing,
+            )
+        }
+        record(result, biggestAny, false, levels.toString())
         if (overall - lastOverall > 2) {
             synchronized(events) {
                 events.addLast(
                     mapOf(
                         "t" to System.currentTimeMillis(),
                         "overall" to overall,
-                        "changed" to changedCount,
-                        "cells" to means.size,
-                        "shift" to diagShift,
-                        "peak" to diagPeak,
+                        "changed" to result.changed,
+                        "cells" to result.total,
+                        "shift" to Math.round(result.shift).toInt(),
+                        "peak" to Math.round(result.peak).toInt(),
                         "biggest" to biggestAny,
+                        "rejected" to result.rejectedLight,
                         "zones" to levels.toString(),
                     ),
                 )
@@ -523,33 +488,45 @@ class Motion {
         }
     }
 
-    /**
-     * Keep the latest tick's numbers and, at most once a second, write a line
-     * when something happened. A static scene stays silent, so a car going by
-     * is easy to find in the log afterwards.
-     */
-    private fun record(
-        changed: Int,
-        total: Int,
-        median: Double,
-        peak: Double,
-        biggest: Int,
-        skip: Boolean,
-        levels: String,
-    ) {
-        diagChanged = changed
-        diagCells = total
-        diagShift = Math.round(median).toInt()
-        diagPeak = Math.round(peak).toInt()
+    private fun overlap(a: Track, b: Detection): Float {
+        val x1 = maxOf(a.x, b.x); val y1 = maxOf(a.y, b.y)
+        val x2 = minOf(a.x + a.w, b.x + b.w)
+        val y2 = minOf(a.y + a.h, b.y + b.h)
+        if (x2 <= x1 || y2 <= y1) return 0f
+        val inter = (x2 - x1) * (y2 - y1)
+        val union = a.w * a.h + b.w * b.h - inter
+        return if (union <= 0f) 0f else inter / union
+    }
+
+    /** Centroid or a corner inside the polygon is enough to count as inside. */
+    private fun overlapsZone(t: Track, points: List<Pair<Double, Double>>): Boolean {
+        val cx = t.x + t.w / 2.0
+        val cy = t.y + t.h / 2.0
+        if (inside(points, cx, cy)) return true
+        for (x in listOf(t.x.toDouble(), (t.x + t.w).toDouble())) {
+            for (y in listOf(t.y.toDouble(), (t.y + t.h).toDouble())) {
+                if (inside(points, x, y)) return true
+            }
+        }
+        for (p in points) if (p.first in t.x..(t.x + t.w) && p.second in t.y..(t.y + t.h)) return true
+        return false
+    }
+
+    private fun record(result: Analysis, biggest: Int, skip: Boolean, levels: String = "") {
+        diagChanged = result.changed
+        diagCells = result.total
+        diagShift = Math.round(result.shift).toInt()
+        diagPeak = Math.round(result.peak).toInt()
         diagBiggest = biggest
         diagSkip = skip
+        diagRejected = result.rejectedLight
         val now = System.currentTimeMillis()
-        if ((!skip && changed == 0) || now - lastDiagLog < 1000) return
+        if ((!skip && result.changed == 0) || now - lastDiagLog < 1000) return
         lastDiagLog = now
         Log.i(
             TAG,
-            "motion tick: changed $changed/$total shift $diagShift peak $diagPeak " +
-                "biggest $biggest${if (levels.isEmpty()) "" else " $levels"}" +
+            "motion tick: changed ${result.changed}/${result.total} shift $diagShift peak $diagPeak " +
+                "biggest $biggest rejected $diagRejected${if (levels.isEmpty()) "" else " $levels"}" +
                 (if (skip) " (skipped)" else ""),
         )
     }
@@ -560,9 +537,7 @@ class Motion {
         for (i in points.indices) {
             val (xi, yi) = points[i]
             val (xj, yj) = points[j]
-            if ((yi > y) != (yj > y) &&
-                x < (xj - xi) * (y - yi) / (yj - yi) + xi
-            ) inside = !inside
+            if ((yi > y) != (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside
             j = i
         }
         return inside

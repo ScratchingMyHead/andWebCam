@@ -47,6 +47,8 @@ object Prefs {
     private const val KEY_MOTION_PREROLL = "motion_preroll"
     private const val KEY_MOTION_LEVEL = "motion_level"
     private const val KEY_MOTION_GRID = "motion_grid"
+    private const val KEY_MOTION_DETECTOR = "motion_detector"
+    private const val KEY_MOTION_LIGHT_GATE = "motion_light_gate"
     private const val KEY_CERT_ENABLED = "cert_enabled"
     private const val KEY_DDNS_ENABLED = "ddns_enabled"
     private const val KEY_CERT_DOMAIN = "cert_domain"
@@ -303,6 +305,16 @@ object Prefs {
     var motionGrid: Int
         get() = sp.getInt(KEY_MOTION_GRID, 32)
         set(v) = edit { putInt(KEY_MOTION_GRID, v.coerceIn(4, 160)) }
+
+    /** Which frame analyser feeds the motion pane and the zone triggers. */
+    var motionDetector: String
+        get() = sp.getString(KEY_MOTION_DETECTOR, "grid").takeIf { it in listOf("grid", "opencv") } ?: "grid"
+        set(v) = edit { if (v in listOf("grid", "opencv")) putString(KEY_MOTION_DETECTOR, v) }
+
+    /** OpenCV mode: reject changes that keep the background's texture. */
+    var motionLightGate: Boolean
+        get() = sp.getBoolean(KEY_MOTION_LIGHT_GATE, true)
+        set(v) = edit { putBoolean(KEY_MOTION_LIGHT_GATE, v) }
 
     // ---- public certificate -----------------------------------------------
 

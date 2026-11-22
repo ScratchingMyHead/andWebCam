@@ -103,7 +103,8 @@ class CamService : Service(), HttpServer.Host {
 
     private val mainHandler = Handler(Looper.getMainLooper())
     private val cameraRetry = Runnable {
-        if (started && (recorder.recording || motion.enabled || (streamingEnabled && hub.count > 0))) camera.start()
+        if (started && (recorder.recording || motion.enabled || motion.previewing() ||
+                (streamingEnabled && hub.count > 0))) camera.start()
     }
     /**
      * Close the camera and end the ring's run of frames. The pre-roll must
@@ -116,12 +117,28 @@ class CamService : Service(), HttpServer.Host {
     }
 
     private val idleStop = Runnable {
-        if (started && hub.count == 0 && !recorder.recording && !motion.enabled) {
+        if (started && hub.count == 0 && !recorder.recording && !motion.enabled && !motion.previewing()) {
             Log.i(TAG, "no viewers; closing camera to save power")
             closeCamera()
             updateNotification()
         }
     }
+    /**
+     * Backstop for the motion pane's preview lease. The pane polls every
+     * few hundred milliseconds; if it stops (tab closed, phone asleep) this
+     * releases the camera and wake lock after the lease runs out.
+     */
+    private val previewTimeout = Runnable {
+        if (started && !motion.previewing()) {
+            updateLocks(hub.count > 0 || motion.enabled)
+            if (hub.count == 0 && !recorder.recording && !motion.enabled) {
+                Log.i(TAG, "motion pane closed; closing camera")
+                closeCamera()
+            }
+            updateNotification()
+        }
+    }
+
     private val refreshNet = Runnable { refreshNetwork() }
 
     override fun onCreate() {
@@ -669,6 +686,8 @@ class CamService : Service(), HttpServer.Host {
             // set and what aspect they were drawn for, so a resolution change
             // can warn before it invalidates them.
             "motion" to motion.enabled,
+            "motionDetector" to motion.detectorName,
+            "motionPreview" to motion.previewing(),
             "motionZones" to motion.zoneCount(),
             "motionAspect" to motion.zoneAspect(),
             "preRoll" to Prefs.motionPreRoll,
@@ -712,6 +731,8 @@ class CamService : Service(), HttpServer.Host {
                 "serviceName" -> if (Prefs.serviceName != v.lowercase()) { Prefs.serviceName = v; restartNet = true }
                 "port" -> v.toIntOrNull()?.let { if (it != Prefs.port) { Prefs.port = it; restartNet = true } }
                 "adminPath" -> Prefs.adminPath = v
+                "motionDetector" -> motion.selectDetector(v)
+                "motionLightGate" -> motion.setLightGate(v.toBoolean())
                 "mdnsEnabled" -> if (Prefs.mdnsEnabled != v.toBoolean()) {
                     Prefs.mdnsEnabled = v.toBoolean(); restartMdns = true
                 }
@@ -920,8 +941,23 @@ class CamService : Service(), HttpServer.Host {
         return if (est["tooHigh"] == true) est["message"] as String else null
     }
 
+    /**
+     * The motion pane's poll doubles as the preview lease. Opening the pane
+     * starts the analyser and the camera even when motion is disarmed, so the
+     * object boxes can be drawn; leaving it lets both go within ten seconds.
+     */
     override fun motionInfo(since: Long): Map<String, Any?> {
         val now = System.currentTimeMillis()
+        val wasPreviewing = motion.previewing()
+        motion.leasePreview()
+        mainHandler.removeCallbacks(previewTimeout)
+        mainHandler.postDelayed(previewTimeout, 11_000L)
+        if (!wasPreviewing) {
+            mainHandler.post {
+                if (started && !camera.active) camera.start()
+                updateLocks(true)
+            }
+        }
         val zones = motion.snapshotSince(since).map {
             mapOf(
                 "id" to it.id,
@@ -938,6 +974,11 @@ class CamService : Service(), HttpServer.Host {
             "preRollEstimate" to preRollEstimate(),
             "level" to motion.triggerLevel(),
             "grid" to motion.gridSize(),
+            "detector" to motion.detectorName,
+            "detectorError" to motion.detectorError,
+            "lightGate" to motion.lightGate(),
+            "previewing" to motion.previewing(),
+            "boxes" to motion.boxSnapshot(),
             "aspect" to motion.zoneAspect(),
             "zones" to zones,
             "events" to motion.eventLog(),
@@ -962,6 +1003,20 @@ class CamService : Service(), HttpServer.Host {
 
     override fun setMotionGrid(cells: Int) {
         motion.setGrid(cells)
+    }
+
+    override fun setMotionPreview(on: Boolean) {
+        if (!on) {
+            motion.stopPreview()
+            mainHandler.removeCallbacks(previewTimeout)
+            mainHandler.post { previewTimeout.run() }
+        }
+    }
+
+    override fun setMotionDetector(name: String, lightGate: Boolean?): String? {
+        val err = motion.selectDetector(name)
+        if (lightGate != null) motion.setLightGate(lightGate)
+        return err
     }
 
     override fun setRecordingCap(percent: Int): String? {

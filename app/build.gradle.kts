@@ -69,6 +69,11 @@ android {
         versionCode = versionBaseCode * 1000 + patch
         versionName = "$versionBase.$patch"
         buildConfigField("String", "BUILD_ID", "\"$buildId\"")
+        // Only the phone this is built for is arm64. Keeping one ABI means
+        // the OpenCV SDK adds about 10 MB instead of over 100 MB.
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     buildTypes {
@@ -96,8 +101,13 @@ android {
         jvmTarget = "17"
     }
 
-    // No AndroidX / no extra dependencies: keeps the download small on a slow link.
+    // No AndroidX and no other dependencies: OpenCV is the one exception,
+    // loaded only when the user selects the object detector.
     dependenciesInfo {
         includeInApk = false
     }
+}
+
+dependencies {
+    implementation("org.opencv:opencv:4.12.0")
 }
