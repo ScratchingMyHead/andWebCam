@@ -247,6 +247,7 @@ class CvDetector : FrameDetector {
         val mask = org.opencv.core.Mat()
         val opened = org.opencv.core.Mat()
         val cleaned = org.opencv.core.Mat()
+        val closed = org.opencv.core.Mat()
         val contours = ArrayList<org.opencv.core.MatOfPoint>()
         val hierarchy = org.opencv.core.Mat()
         // A 2x2 opening preserves thin, distant silhouettes that a 3x3 one
@@ -256,6 +257,12 @@ class CvDetector : FrameDetector {
         )
         val dilateKernel = org.opencv.imgproc.Imgproc.getStructuringElement(
             org.opencv.imgproc.Imgproc.MORPH_ELLIPSE, org.opencv.core.Size(3.0, 3.0)
+        )
+        // Thin flower stems cut an object into side-by-side pieces. A wide,
+        // shallow closing bridges those horizontal gaps without joining
+        // objects that are separated vertically.
+        val closeKernel = org.opencv.imgproc.Imgproc.getStructuringElement(
+            org.opencv.imgproc.Imgproc.MORPH_RECT, org.opencv.core.Size(9.0, 3.0)
         )
         try {
             val bmp = if (bitmap.config == Bitmap.Config.ARGB_8888) bitmap
@@ -290,9 +297,12 @@ class CvDetector : FrameDetector {
                 mask, opened, org.opencv.imgproc.Imgproc.MORPH_OPEN, openKernel
             )
             org.opencv.imgproc.Imgproc.dilate(opened, cleaned, dilateKernel)
+            org.opencv.imgproc.Imgproc.morphologyEx(
+                cleaned, closed, org.opencv.imgproc.Imgproc.MORPH_CLOSE, closeKernel
+            )
             contours.clear()
             org.opencv.imgproc.Imgproc.findContours(
-                cleaned, contours, hierarchy,
+                closed, contours, hierarchy,
                 org.opencv.imgproc.Imgproc.RETR_EXTERNAL,
                 org.opencv.imgproc.Imgproc.CHAIN_APPROX_SIMPLE,
             )
@@ -348,8 +358,8 @@ class CvDetector : FrameDetector {
             return Analysis(out, changed, n, sumDelta / n, peak, false, rejected + shadowCount)
         } finally {
             rgba.release(); gmat.release(); mask.release()
-            opened.release(); cleaned.release(); hierarchy.release()
-            openKernel.release(); dilateKernel.release()
+            opened.release(); cleaned.release(); closed.release(); hierarchy.release()
+            openKernel.release(); dilateKernel.release(); closeKernel.release()
             contours.forEach { it.release() }
         }
     }
