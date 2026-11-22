@@ -106,6 +106,10 @@ object WebUi {
  .dbghint { text-transform:none; letter-spacing:0; color:#667; margin-left:6px }
  .dbg .dbgline { white-space:pre-wrap }
  .dbg .hi { color:#e8b; }
+ .dbg table { border-collapse:collapse; font:inherit; width:100% }
+ .dbg th { text-align:left; font-weight:600; color:#8ab; padding:0 8px 3px 0; white-space:nowrap; border-bottom:1px solid #333 }
+ .dbg td { padding:1px 8px 0 0; white-space:nowrap }
+ .dbg tr:nth-child(even) td { background:#131313 }
  .zrow button { padding:5px 9px; font-size:12px }
  .zrow button svg { width:13px; height:13px; display:block; margin:0 auto; fill:currentColor }
  .vrow input[type=range] { padding:0 }
@@ -1472,20 +1476,40 @@ function renderMotionDebug(events) {
     box.innerHTML = '<p class="hint">No activations yet.</p>';
     return;
   }
-  var out = '';
+  var out = '<table><thead><tr>' +
+    '<th title="time of the tick">time</th>' +
+    '<th title="overall level">all</th>' +
+    '<th title="changed cells / cells compared">chg</th>' +
+    '<th title="frame shift">shift</th>' +
+    '<th title="peak pixel change">peak</th>' +
+    '<th title="biggest level in any zone">big</th>' +
+    '<th title="pixels rejected as lighting">light</th>' +
+    '<th title="largest object in each zone">zones</th>' +
+    '<th title="zones rejecting on size, with the size in slider units">reject</th>' +
+    '<th title="zones meeting the recording size criteria">match</th>' +
+    '<th title="zones that actually started a recording">trig</th>' +
+    '</tr></thead><tbody>';
   for (var i = events.length - 1; i >= 0; i--) {
     var e = events[i];
     var d = new Date(e.t);
     var tm = [d.getHours(), d.getMinutes(), d.getSeconds()].map(function(n) {
       return (n < 10 ? '0' : '') + n;
     }).join(':') + '.' + ('00' + d.getMilliseconds()).slice(-3);
-    out += '<div class="dbgline"><span class="hi">' + tm + '</span>  ' +
-      e.overall + '%  changed ' + e.changed + '/' + e.cells +
-      '  shift ' + e.shift + '  peak ' + e.peak +
-      '  biggest ' + e.biggest + '  rejected ' + (e.rejected || 0) +
-      (e.zones ? '  ' + e.zones : '') + '</div>';
+    out += '<tr>' +
+      '<td class="hi">' + tm + '</td>' +
+      '<td>' + e.overall + '%</td>' +
+      '<td>' + e.changed + '/' + e.cells + '</td>' +
+      '<td>' + e.shift + '</td>' +
+      '<td>' + e.peak + '</td>' +
+      '<td>' + e.biggest + '</td>' +
+      '<td>' + (e.rejected || 0) + '</td>' +
+      '<td>' + (e.zones || '') + '</td>' +
+      '<td>' + (e.reject || '') + '</td>' +
+      '<td>' + (e.match ? 'z' + e.match : '') + '</td>' +
+      '<td>' + (e.trigger ? 'z' + e.trigger : '') + '</td>' +
+      '</tr>';
   }
-  box.innerHTML = out;
+  box.innerHTML = out + '</tbody></table>';
 }
 
 function buildZoneList(d) {  var list = el('zoneList');
@@ -1875,13 +1899,14 @@ function drawZones() {
       '" fill="#fff" font-size="60" text-anchor="middle" dominant-baseline="middle">' +
       z.id + '</text>');
   });
-  // Detected objects over the whole picture: cyan outside zones, red once
-  // they move into one, and solid bright red when they also meet its minimum
-  // size. These are drawn even with motion detection switched off.
+  // Detected objects over the whole picture: cyan normally, solid red only
+  // when the object is between a zone's minimum and maximum size, i.e. when
+  // it would start a recording. Being inside a zone is not red by itself.
+  // These are drawn even with motion detection switched off.
   boxes.forEach(function(b) {
     var x = (b.x * 1000).toFixed(1), y = (b.y * 1000).toFixed(1);
     var w = (b.w * 1000).toFixed(1), h = (b.h * 1000).toFixed(1);
-    var color = b.firing ? '#ff1744' : (b.zone ? '#ff6b6b' : '#29b6f6');
+    var color = b.firing ? '#ff1744' : '#29b6f6';
     var width = b.firing ? 5 : 3;
     out.push('<rect x="' + x + '" y="' + y + '" width="' + w + '" height="' + h +
       '" fill="none" stroke="' + color + '" stroke-width="' + width + '"' +

@@ -295,7 +295,11 @@ class CvDetector : FrameDetector {
             val gate = Prefs.motionLightGate
             // At the default sensitivity a distant car is only a few dozen
             // pixels at this size; an over-large minimum loses those entirely.
-            val minArea = n * (0.0008 + (100 - sensitivity) * 0.00004)
+            // The floor has to be low enough for a person across the road:
+            // at full sensitivity that is only ~14 px in a 320-wide frame.
+            // Tiny blobs still need two ticks to become a visible box, so
+            // the extra contours cost accuracy, not a shower of specks.
+            val minArea = n * (0.00025 + (100 - sensitivity) * 0.000035)
             val maxArea = n * 0.12
             // The slider is logarithmic between the smallest detectable blob
             // and 12% of the frame. A linear area scale squeezed everything

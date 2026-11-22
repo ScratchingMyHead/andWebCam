@@ -444,34 +444,50 @@ class Motion {
 
         var nowActive = false
         val fired = ArrayList<Int>()
+        val met = ArrayList<Int>()
         var biggestAny = 0
         var overall = 0
         val levels = StringBuilder()
+        val rejectInfo = StringBuilder()
         val tickLevels = IntArray(zones.size)
         for (track in tracks) { track.zone = 0; track.firing = false }
         synchronized(zones) {
             for ((index, zone) in zones.withIndex()) {
                 var biggest = 0
+                var dominant: Track? = null
                 for (track in visible) {
                     if (!overlapsZone(track, zone.points)) continue
-                    if (track.level > biggest) biggest = track.level
-                    // Levels stop at 100, so max 100 means no upper bound.
-                    val fits = track.level >= zone.sensitivity &&
-                        (zone.max >= 100 || track.level <= zone.max)
-                    if (track.zone == 0) {
-                        track.zone = index + 1
-                        track.firing = fits
+                    if (track.level > biggest) {
+                        biggest = track.level
+                        dominant = track
                     }
+                    if (track.zone == 0) track.zone = index + 1
                 }
                 // Trigger on the largest object in the zone, the same value
                 // its meter shows. Otherwise a small fragment of a vehicle
                 // could fire a zone the vehicle itself is too big for.
                 val fires = biggest >= zone.sensitivity &&
                     (zone.max >= 100 || biggest <= zone.max)
+                // Red means "would record": only the object that decided the
+                // trigger gets marked, so an out-of-range vehicle cannot
+                // leave a small fragment looking like a hit.
+                if (dominant != null && fires) dominant.firing = true
+                if (fires) met.add(index + 1)
                 if (biggest > biggestAny) biggestAny = biggest
                 zone.level = biggest
                 tickLevels[index] = biggest
                 if (biggest > overall) overall = biggest
+                // Show why a zone ignored an object in the debug line: (<)
+                // too small for the minimum, (>) too big for the maximum.
+                val rejected = if (biggest <= 0) "" else when {
+                    biggest < zone.sensitivity -> "(<)"
+                    zone.max < 100 && biggest > zone.max -> "(>)"
+                    else -> ""
+                }
+                if (rejected.isNotEmpty()) {
+                    if (rejectInfo.isNotEmpty()) rejectInfo.append(' ')
+                    rejectInfo.append("z${index + 1}$rejected$biggest")
+                }
                 if (levels.isNotEmpty()) levels.append(' ')
                 levels.append("z${index + 1}=$biggest")
                 if (enabled && fires) {
@@ -501,7 +517,10 @@ class Motion {
             )
         }
         record(result, biggestAny, false, levels.toString())
-        if (overall - lastOverall > 2) {
+        // A tick that starts a recording is always worth a debug line, even
+        // when the overall level did not rise. "match" means the zone's size
+        // criteria were met; "trigger" means a recording actually started.
+        if (overall - lastOverall > 2 || fired.isNotEmpty()) {
             synchronized(events) {
                 events.addLast(
                     mapOf(
@@ -514,6 +533,9 @@ class Motion {
                         "biggest" to biggestAny,
                         "rejected" to result.rejectedLight,
                         "zones" to levels.toString(),
+                        "reject" to rejectInfo.toString(),
+                        "match" to met.joinToString(","),
+                        "trigger" to fired.joinToString(","),
                     ),
                 )
                 while (events.size > 40) events.removeFirst()
