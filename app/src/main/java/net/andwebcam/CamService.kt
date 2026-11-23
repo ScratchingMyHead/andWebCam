@@ -74,14 +74,14 @@ class CamService : Service(), HttpServer.Host {
     }
 
     private lateinit var hub: StreamHub
-    private lateinit var audio: AudioHub
     private lateinit var camera: CameraController
     private lateinit var scaler: StreamScaler
     private val lastFull = java.util.concurrent.atomic.AtomicReference<ByteArray?>()
     private lateinit var server: HttpServer
     private var publicServer: HttpServer? = null
     private val ring = VideoRing()
-    private val recorder = Recorder(this)
+    private val audio = AudioHub(this)
+    private val recorder = Recorder(this, audio)
     private val motion = Motion()
     private val publicFeed = PublicFeed()
 
@@ -133,7 +133,7 @@ class CamService : Service(), HttpServer.Host {
      */
     private val previewTimeout = Runnable {
         if (started && !motion.previewing()) {
-            updateLocks(hub.count > 0 || motion.enabled || publicFeed.isEnabled())
+            updateLocks(watchingSomething())
             if (hub.count == 0 && !recorder.recording && !motion.enabled && !publicFeed.isEnabled()) {
                 Log.i(TAG, "motion pane closed; closing camera")
                 closeCamera()
@@ -150,10 +150,9 @@ class CamService : Service(), HttpServer.Host {
         publicFeed.configure(Prefs.publicFeedUrl, Prefs.publicFeedToken, Prefs.viewerPassword)
         hub = StreamHub()
         State.clients = 0
-        audio = AudioHub(this)
         audio.onClientsChanged = { count ->
             mainHandler.post {
-                if (started) updateLocks(hub.count > 0 || count > 0 || motion.enabled || publicFeed.isEnabled())
+                if (started) updateLocks(watchingSomething())
             }
         }
         scaler = StreamScaler({ jpeg -> hub.broadcast(jpeg) }, { hub.count > 0 })
@@ -280,12 +279,13 @@ class CamService : Service(), HttpServer.Host {
             updateNotification()
             return
         }
-        updateLocks(publicFeed.isEnabled())   // start asleep unless a public feed is configured
         State.serviceName = Prefs.serviceName
         State.port = Prefs.port
         State.ip = localIp()
 
         streamingEnabled = Prefs.autoStartStreaming
+        audio.setRecordSource(streamingEnabled && Prefs.recordAudio && AudioHub.hasPermission(this))
+        updateLocks(watchingSomething())   // start asleep unless something is watching or recording
         hub.onClientsChanged = { count -> onClientsChanged(count) }
         // The camera is not opened here: it stays closed until someone is
         // actually watching, and closes again when the last viewer leaves.
@@ -327,7 +327,7 @@ class CamService : Service(), HttpServer.Host {
             // the service has to be doing something.
             mainHandler.post {
                 if (!camera.active) camera.start()
-                updateLocks(hub.count > 0 || motion.enabled || publicFeed.isEnabled())
+                updateLocks(watchingSomething())
                 updateNotification()
             }
         }
@@ -592,6 +592,10 @@ class CamService : Service(), HttpServer.Host {
         mainHandler.postDelayed(cameraRetry, 5000)
     }
 
+    /** Anything that needs the CPU awake: viewers, sound capture or motion. */
+    private fun watchingSomething(): Boolean =
+        hub.count > 0 || audio.count > 0 || audio.recordingSource || motion.enabled || publicFeed.isEnabled()
+
     /**
      * Camera power policy: open it only while somebody is watching, and close
      * it after a short grace period once the last viewer leaves.
@@ -615,6 +619,7 @@ class CamService : Service(), HttpServer.Host {
 
     private fun setStreaming(on: Boolean) {
         streamingEnabled = on
+        audio.setRecordSource(on && Prefs.recordAudio && AudioHub.hasPermission(this))
         Log.i(TAG, "streaming enabled=$on")
         if (on) {
             if (hub.count > 0) camera.start()
@@ -627,7 +632,7 @@ class CamService : Service(), HttpServer.Host {
             if (recorder.recording) recorder.stop()
             else if (!motion.enabled && !publicFeed.isEnabled()) closeCamera()
         }
-        updateLocks(hub.count > 0 || motion.enabled || publicFeed.isEnabled())
+        updateLocks(watchingSomething())
         updateNotification()
     }
 
@@ -694,6 +699,9 @@ class CamService : Service(), HttpServer.Host {
                 "available" to AudioHub.hasPermission(this),
                 "listening" to audio.count,
                 "capturing" to audio.capturing,
+                "recordAudio" to Prefs.recordAudio,
+                "recordingSource" to audio.recordingSource,
+                "ring" to audio.ring.size,
                 "error" to audio.error,
             ),
             "width" to sz.width,
@@ -772,6 +780,10 @@ class CamService : Service(), HttpServer.Host {
                 "audioEnabled" -> {
                     Prefs.audioEnabled = v.toBoolean()
                     if (!Prefs.audioEnabled) audio.disconnectAll()
+                }
+                "recordAudio" -> {
+                    Prefs.recordAudio = v.toBoolean()
+                    audio.setRecordSource(streamingEnabled && Prefs.recordAudio && AudioHub.hasPermission(this))
                 }
                 "publicFeedUrl" -> {
                     Prefs.publicFeedUrl = v
@@ -924,7 +936,7 @@ class CamService : Service(), HttpServer.Host {
         if (err == null) {
             mainHandler.post {
                 if (motion.enabled && !camera.active) camera.start()
-                updateLocks(hub.count > 0 || motion.enabled || publicFeed.isEnabled())
+                updateLocks(watchingSomething())
                 updateNotification()
             }
         }
@@ -982,6 +994,9 @@ class CamService : Service(), HttpServer.Host {
         val bytes = est["bytes"] as Long
         val budget = if (secs == 0) 1L else bytes * 2 + 8L * 1024 * 1024
         ring.configure(secs * 1000L, budget)
+        // Sound reuses the same window, with a modest byte budget: 30 s of
+        // 16 kHz mono PCM is under a megabyte.
+        audio.configureRing(secs * 1000L, 2L * 1024 * 1024)
     }
 
     /** Refuse a start that would ask for more pre-roll memory than we have. */

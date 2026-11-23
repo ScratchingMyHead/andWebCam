@@ -243,6 +243,10 @@ object WebUi {
         <label class="check"><input id="s_audio" type="checkbox"> Live sound from the microphone</label>
       </div>
       <p class="hint">Viewers press a Sound button; the microphone is only open while someone listens. Turning this off disconnects them.</p>
+      <div class="row">
+        <label class="check"><input id="s_recaudio" type="checkbox"> Record sound in MP4 files</label>
+      </div>
+      <p class="hint">Sound gets the same pre-roll as the video. The microphone stays open while streaming, so Android shows its indicator the whole time.</p>
 
       <h2>Access</h2>
       <div class="row">
@@ -960,6 +964,7 @@ function refresh() {
     if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
     if (document.activeElement !== el('s_mdns')) { el('s_mdns').checked = s.mdnsEnabled !== false; }
     if (document.activeElement !== el('s_audio')) { el('s_audio').checked = !!(s.audio && s.audio.enabled); }
+    if (document.activeElement !== el('s_recaudio')) { el('s_recaudio').checked = !!(s.audio && s.audio.recordAudio); }
     if (document.activeElement !== el('s_adminpath')) { el('s_adminpath').value = s.adminPath || ''; }
     var host = s.host || ((s.serviceName || 'andwebcam') + '.local');
     el('s_adminpath').placeholder = 'e.g. admin for ' + host + '/admin';
@@ -1023,6 +1028,7 @@ el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
 el('s_mdns').onchange = function() { setSetting('mdnsEnabled', this.checked); };
 el('s_audio').onchange = function() { setSetting('audioEnabled', this.checked); };
+el('s_recaudio').onchange = function() { setSetting('recordAudio', this.checked); };
 el('s_adminpath').onchange = function() { setSetting('adminPath', this.value); };
 el('s_puburl').onchange = function() { setSetting('publicFeedUrl', this.value); };
 el('s_pubtoken').onchange = function() { setSetting('publicFeedToken', this.value); };

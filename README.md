@@ -16,8 +16,9 @@ entirely from a browser.
   AudioContext. The microphone is open only while someone is listening.
 - **Camera controls** — front or back camera, resolution, frame rate, JPEG
   quality, zoom, orientation and torch, all adjustable while streaming.
-- **Recording** — MP4 files on the phone with a 10-second pre-roll, a storage
-  cap, in-page playback and downloads with byte-range support.
+- **Recording** — MP4 files on the phone with a 10-second pre-roll, optional
+  AAC sound, a storage cap, in-page playback and downloads with byte-range
+  support.
 - **Motion activation** — cell-grid detector or OpenCV object tracking with
   polygon zones, live object boxes and automatic recordings.
 - **Networking** — mDNS/DNS-SD discovery (`<name>.local`), optional anonymous

@@ -36,6 +36,7 @@ object Prefs {
     private const val KEY_VIEWER_PASSWORD = "viewer_password"
     private const val KEY_MDNS = "mdns_enabled"
     private const val KEY_AUDIO = "audio_enabled"
+    private const val KEY_RECORD_AUDIO = "record_audio"
     private const val KEY_AUTO_START_STREAM = "auto_start_stream"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BATTERY_ASKED = "battery_asked"
@@ -169,6 +170,15 @@ object Prefs {
     var audioEnabled: Boolean
         get() = sp.getBoolean(KEY_AUDIO, false)
         set(v) = edit { putBoolean(KEY_AUDIO, v) }
+
+    /**
+     * Put sound into MP4 recordings. The mic stays open while streaming so a
+     * recording can include the same pre-roll window as the video. Off by
+     * default: Android shows a microphone indicator the whole time it is on.
+     */
+    var recordAudio: Boolean
+        get() = sp.getBoolean(KEY_RECORD_AUDIO, false)
+        set(v) = edit { putBoolean(KEY_RECORD_AUDIO, v) }
 
     var facing: String
         get() = sp.getString(KEY_FACING, "back")!!

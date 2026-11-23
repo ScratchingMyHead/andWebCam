@@ -24,7 +24,9 @@ import java.util.concurrent.TimeUnit
  * plus everything after the button press, encoded to one MP4 per session in
  * the video/ subfolder of the chosen storage location.
  *
- * Pipeline: JPEG -> Bitmap -> NV12 -> H.264 (MediaCodec) -> MediaMuxer.
+ * Pipeline: JPEG -> Bitmap -> NV12 -> H.264 (MediaCodec) -> MediaMuxer,
+ * with an optional AAC track fed from the audio ring's pre-roll and the
+ * microphone's live chunks. Both tracks share the file's time base.
  * The muxer needs an OS file descriptor, which SAF offers through
  * openFileDescriptor(); the file is created under a temporary name and
  * renamed when the session ends, so a crash mid-recording leaves only a
@@ -38,10 +40,11 @@ import java.util.concurrent.TimeUnit
  * Everything that touches the encoder, the file or the SAF tree happens on
  * one worker thread; other threads only ask it to.
  */
-class Recorder(private val ctx: Context) {
+class Recorder(private val ctx: Context, private val audio: AudioHub) {
     companion object {
         private const val TAG = "andWebCam"
         const val VIDEOS_DIR = "video"
+        private const val MIME_AAC = "audio/mp4a-latm"
         const val MEMORY_ERROR =
             "Recording stopped: resolution and/or pre-roll is too high. Lower the resolution or pre-roll."
 
@@ -111,6 +114,25 @@ class Recorder(private val ctx: Context) {
     private var muxer: MediaMuxer? = null
     private var muxerStarted = false
     private var trackId = -1
+    private var audioTrackId = -1
+    private var audioEnc: MediaCodec? = null
+    private var audioFormat: MediaFormat? = null
+    private var videoFormat: MediaFormat? = null
+    private val pendingVideo = ArrayList<Pair<ByteArray, MediaCodec.BufferInfo>>()
+    private val pendingAudio = ArrayList<Pair<ByteArray, MediaCodec.BufferInfo>>()
+    private val audioQueue = LinkedBlockingQueue<AudioRing.Chunk>(200)
+    private var audioPreroll = emptyList<AudioRing.Chunk>()
+    private var audioIdx = 0
+    private var audioPtsUs = -1L
+    private var audioBytes = 0L
+    private var audioChunks = 0
+    private var audioDone = false
+    private var lastVideoTimeMs = 0L
+
+    /** Whether the last finished file really carries an audio track. */
+    @Volatile
+    var soundInLastFile = false
+        private set
     private var pfd: ParcelFileDescriptor? = null
     private var doc: Uri? = null
     private var dir: Uri? = null
@@ -209,6 +231,7 @@ class Recorder(private val ctx: Context) {
         val out = mutableMapOf<String, Any?>()
         out["recording"] = recording
         out["note"] = lastNote
+        out["sound"] = soundInLastFile
         out["capPercent"] = Prefs.videoCapPercent
         val t = Saf.tree
         if (t == null) {
@@ -395,6 +418,21 @@ class Recorder(private val ctx: Context) {
         this.muxer = mux
         this.muxerStarted = false
         this.trackId = -1
+        this.audioTrackId = -1
+        this.audioEnc = null
+        this.audioFormat = null
+        this.videoFormat = null
+        this.pendingVideo.clear()
+        this.pendingAudio.clear()
+        this.audioQueue.clear()
+        this.audioPreroll = emptyList()
+        this.audioIdx = 0
+        this.audioPtsUs = -1L
+        this.audioBytes = 0L
+        this.audioChunks = 0
+        this.audioDone = false
+        this.lastVideoTimeMs = 0L
+        this.soundInLastFile = false
         this.writtenBytes = 0
         this.framesFed = 0
         this.savedName = null
@@ -425,6 +463,32 @@ class Recorder(private val ctx: Context) {
         ringFrames = ringRef?.drain() ?: emptyList()
         ringIdx = 0
 
+        // Sound: the audio ring carries the same window of pre-roll as the
+        // video ring. The encoder is optional; if none is available the file
+        // is still a valid video-only recording.
+        if (Prefs.recordAudio && AudioHub.hasPermission(ctx)) {
+            val aenc = selectAudioEncoder()
+            if (aenc != null) {
+                audioEnc = aenc
+                audioPreroll = audio.beginRecording { c ->
+                    if (!audioQueue.offer(c)) {
+                        audioQueue.poll()
+                        audioQueue.offer(c)
+                    }
+                }
+            } else {
+                Log.w(TAG, "no AAC encoder; recording video only")
+            }
+        }
+        // Both tracks share one time base. Anchor it to the video pre-roll:
+        // its byte budget can be shorter than the sound ring's window, and
+        // starting sound earlier would leave the picture beginning several
+        // seconds into an otherwise silent recording.
+        t0Ms = ringFrames.firstOrNull()?.timeMs ?: 0L
+        if (t0Ms != 0L && audioPreroll.isNotEmpty()) {
+            audioPreroll = audioPreroll.filter { it.timeMs >= t0Ms }
+        }
+
         tempFile = tempName
         recording = true
         recStartMs = System.currentTimeMillis()
@@ -448,14 +512,27 @@ class Recorder(private val ctx: Context) {
                 if (stopRequested) break
                 val f = nextFrame()
                 if (f == null) {
-                    // The camera went quiet (or is between frames): keep
-                    // waiting for the next frame or the stop request.
+                    drainAudio(0)
                     continue
                 }
+                // The audio sink may still be waiting for its first AAC
+                // output; after enough pre-roll it clearly is not coming, so
+                // finish the file as video only rather than never starting.
+                if (videoFormat != null && audioEnc != null && audioFormat == null && audioChunks > 40) {
+                    Log.w(TAG, "AAC encoder produced no format; saving video only")
+                    audio.endRecording()
+                    audioEnc = null
+                }
+                feedAudioUntil(f.timeMs)
                 feedFrame(enc, f, w, h)
                 drainEncoder(enc, w, h, 0)
+                drainAudio(0)
                 checkCap()
             }
+            // Whatever sound arrived after the last frame belongs to this
+            // session too; a little tail keeps the audio from ending early.
+            val lastFrameMs = if (lastVideoTimeMs > 0L) lastVideoTimeMs else System.currentTimeMillis()
+            feedAudioUntil(lastFrameMs + 500)
         } catch (e: OutOfMemoryError) {
             memoryFailure = true
             stopRequested = true
@@ -471,6 +548,7 @@ class Recorder(private val ctx: Context) {
         // Frames that arrived while the file was being finalized belong to
         // the session that just ended, not to whatever comes next.
         frameQueue.clear()
+        audioQueue.clear()
         when {
             memoryFailure -> note(MEMORY_ERROR)
             finished == 1 ->
@@ -498,6 +576,7 @@ class Recorder(private val ctx: Context) {
     private fun feedFrame(enc: MediaCodec, f: VideoRing.Frame, w: Int, h: Int) {
         if (!jpegToNv12(f.jpeg, w, h)) return
         if (t0Ms == 0L) t0Ms = f.timeMs
+        lastVideoTimeMs = f.timeMs
         var pts = (f.timeMs - t0Ms) * 1000L
         if (pts <= lastPtsUs) pts = lastPtsUs + 1
         lastPtsUs = pts
@@ -520,6 +599,80 @@ class Recorder(private val ctx: Context) {
      * session runs (there is always more input coming) and a real wait while
      * flushing at the end.
      */
+    /** Feed all sound at or before a frame's time, keeping pre-roll first. */
+    private fun feedAudioUntil(limitMs: Long) {
+        while (true) {
+            val c = if (audioIdx < audioPreroll.size) {
+                val next = audioPreroll[audioIdx]
+                if (next.timeMs > limitMs) return
+                audioIdx++
+                next
+            } else {
+                val next = audioQueue.peek() ?: return
+                if (next.timeMs > limitMs) return
+                audioQueue.poll() ?: return
+            }
+            feedAudioChunk(c)
+        }
+    }
+
+    private fun feedAudioChunk(c: AudioRing.Chunk) {
+        val enc = audioEnc ?: return
+        // No video time base yet means the first frame has not arrived;
+        // sound before it would start the file with a silent picture gap.
+        if (t0Ms == 0L || c.timeMs < t0Ms) return
+        var pts = (c.timeMs - t0Ms) * 1000L
+        if (pts < 0) pts = 0
+        if (pts <= audioPtsUs) pts = audioPtsUs + 1
+        audioPtsUs = pts
+        val idx = try { enc.dequeueInputBuffer(100) } catch (e: Exception) { return }
+        if (idx < 0) return
+        val buf = enc.getInputBuffer(idx) ?: return
+        buf.clear()
+        buf.put(c.pcm)
+        enc.queueInputBuffer(idx, 0, c.pcm.size, pts, 0)
+        audioChunks++
+    }
+
+    /** Move finished AAC packets into the muxer, or buffer until it starts. */
+    private fun drainAudio(timeoutUs: Long) {
+        val enc = audioEnc ?: return
+        val info = MediaCodec.BufferInfo()
+        while (true) {
+            val idx = try {
+                enc.dequeueOutputBuffer(info, timeoutUs)
+            } catch (e: Exception) {
+                return
+            }
+            if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
+                audioFormat = try { enc.outputFormat } catch (e: Exception) { null }
+                tryStartMuxer()
+                continue
+            }
+            if (idx == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) continue
+            if (idx < 0) return
+            if (audioFormat == null && info.size > 0) {
+                audioFormat = try { enc.outputFormat } catch (e: Exception) { null }
+                tryStartMuxer()
+            }
+            val config = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
+            if (info.size > 0 && !config) {
+                val b = enc.getOutputBuffer(idx)
+                if (b != null) {
+                    val sample = copySample(b, info)
+                    audioBytes += info.size
+                    if (muxerStarted) writeSample(audioTrackId, sample)
+                    else pendingAudio.add(sample)
+                }
+            }
+            enc.releaseOutputBuffer(idx, false)
+            if ((info.flags and MediaCodec.BUFFER_FLAG_END_OF_STREAM) != 0) {
+                audioDone = true
+                return
+            }
+        }
+    }
+
     private fun drainEncoder(enc: MediaCodec, w: Int, h: Int, timeoutUs: Long): Boolean {
         val info = MediaCodec.BufferInfo()
         while (true) {
@@ -527,24 +680,23 @@ class Recorder(private val ctx: Context) {
             // The two informational results are negative numbers too, so they
             // are tested before the give-up case.
             if (idx == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
-                startMuxer(enc, w, h)
+                captureVideoFormat(enc, w, h)
                 continue
             }
             if (idx == MediaCodec.INFO_OUTPUT_BUFFERS_CHANGED) continue
             if (idx < 0) return false
             // The format event does not always arrive first (or at all, on
-            // some bridges): the first real sample starts the muxer too.
-            if (info.size > 0) startMuxer(enc, w, h)
+            // some bridges): the first real sample starts it too.
+            if (videoFormat == null) captureVideoFormat(enc, w, h)
             // A codec-config buffer is the SPS/PPS, which the track format
             // already carries; writing it as a sample would be wrong.
             val config = (info.flags and MediaCodec.BUFFER_FLAG_CODEC_CONFIG) != 0
-            if (muxerStarted && info.size > 0 && !config) {
+            if (info.size > 0 && !config) {
                 val b = enc.getOutputBuffer(idx)
                 if (b != null) {
-                    b.position(info.offset)
-                    b.limit(info.offset + info.size)
-                    muxer!!.writeSampleData(trackId, b, info)
-                    writtenBytes += info.size
+                    val sample = copySample(b, info)
+                    if (muxerStarted) writeSample(trackId, sample)
+                    else pendingVideo.add(sample)
                 }
             }
             enc.releaseOutputBuffer(idx, false)
@@ -552,26 +704,97 @@ class Recorder(private val ctx: Context) {
         }
     }
 
-    /**
-     * Add the video track and open the file for samples, once per session.
-     * The encoder's own output format is the best source (it carries the
-     * resolution and the SPS/PPS the muxer needs); the session's settings
-     * fill in anything it leaves out.
-     */
-    private fun startMuxer(enc: MediaCodec, w: Int, h: Int) {
-        if (muxerStarted) return
-        val mx = muxer ?: return
+    /** Remember the video track format once the encoder publishes it. */
+    private fun captureVideoFormat(enc: MediaCodec, w: Int, h: Int) {
+        if (videoFormat != null) return
         val fmt = try {
-            enc.getOutputFormat()
+            enc.outputFormat
         } catch (e: Exception) {
             null
         } ?: MediaFormat.createVideoFormat(MIME_AVC, w, h)
         if (!fmt.containsKey(MediaFormat.KEY_MIME)) fmt.setString(MediaFormat.KEY_MIME, MIME_AVC)
         if (!fmt.containsKey(MediaFormat.KEY_WIDTH)) fmt.setInteger(MediaFormat.KEY_WIDTH, w)
         if (!fmt.containsKey(MediaFormat.KEY_HEIGHT)) fmt.setInteger(MediaFormat.KEY_HEIGHT, h)
-        trackId = mx.addTrack(fmt)
+        videoFormat = fmt
+        tryStartMuxer()
+    }
+
+    /**
+     * Both tracks must be present before MediaMuxer.start(). Sound normally
+     * arrives within a few frames, but packets produced while we wait are
+     * kept and written as soon as it does.
+     */
+    private fun tryStartMuxer() {
+        if (muxerStarted) return
+        val mx = muxer ?: return
+        val vf = videoFormat ?: return
+        if (audioEnc != null && audioFormat == null) return
+        val af = audioFormat
+        trackId = mx.addTrack(vf)
+        if (audioEnc != null && af != null) {
+            audioTrackId = mx.addTrack(af)
+        }
         mx.start()
         muxerStarted = true
+        soundInLastFile = audioTrackId >= 0
+        for (s in pendingVideo) writeSample(trackId, s)
+        pendingVideo.clear()
+        for (s in pendingAudio) writeSample(audioTrackId, s)
+        pendingAudio.clear()
+    }
+
+    private fun copySample(b: java.nio.ByteBuffer, info: MediaCodec.BufferInfo): Pair<ByteArray, MediaCodec.BufferInfo> {
+        val bytes = ByteArray(info.size)
+        b.position(info.offset)
+        b.get(bytes)
+        val copy = MediaCodec.BufferInfo().apply {
+            set(0, info.size, info.presentationTimeUs, info.flags)
+        }
+        return bytes to copy
+    }
+
+    private fun writeSample(track: Int, sample: Pair<ByteArray, MediaCodec.BufferInfo>) {
+        if (track < 0) return
+        val (bytes, info) = sample
+        muxer?.writeSampleData(track, java.nio.ByteBuffer.wrap(bytes), info)
+        writtenBytes += info.size
+    }
+
+    /** The device's AAC-LC encoder, started and ready for 16 kHz mono PCM. */
+    private fun selectAudioEncoder(): MediaCodec? {
+        val info = try {
+            android.media.MediaCodecList(android.media.MediaCodecList.REGULAR_CODECS)
+                .getCodecInfos().toList()
+                .firstOrNull { it.isEncoder && MIME_AAC in it.getSupportedTypes() }
+        } catch (e: Exception) {
+            null
+        }
+        val candidates = if (info == null) emptyList() else listOf(info)
+        for (c in candidates) {
+            val codec = try {
+                MediaCodec.createByCodecName(c.name)
+            } catch (e: Exception) {
+                continue
+            }
+            if (configureAudio(codec)) return codec
+            try { codec.release() } catch (_: Exception) {}
+        }
+        val fallback = try { MediaCodec.createEncoderByType(MIME_AAC) } catch (e: Exception) { null }
+        return if (fallback != null && configureAudio(fallback)) fallback else null
+    }
+
+    private fun configureAudio(codec: MediaCodec): Boolean = try {
+        val fmt = MediaFormat.createAudioFormat(MIME_AAC, AudioHub.SAMPLE_RATE, AudioHub.CHANNELS).apply {
+            setInteger(MediaFormat.KEY_AAC_PROFILE, MediaCodecInfo.CodecProfileLevel.AACObjectLC)
+            setInteger(MediaFormat.KEY_BIT_RATE, 32_000)
+        }
+        codec.configure(fmt, null, null, MediaCodec.CONFIGURE_FLAG_ENCODE)
+        codec.start()
+        Log.i(TAG, "audio encoder: ${codec.name}")
+        true
+    } catch (e: Exception) {
+        Log.w(TAG, "audio encoder refused the format: ${e.message}")
+        false
     }
 
     /**
@@ -651,6 +874,26 @@ class Recorder(private val ctx: Context) {
             var done = !flushed
             while (!done && System.currentTimeMillis() < deadline) {
                 done = drainEncoder(enc, w, h, if (flushed) 20_000 else 200)
+                drainAudio(0)
+            }
+            // The audio encoder needs the same end-of-stream treatment.
+            val aenc = audioEnc
+            if (aenc != null) {
+                try {
+                    val ai = aenc.dequeueInputBuffer(200_000)
+                    if (ai >= 0) {
+                        aenc.queueInputBuffer(
+                            ai, 0, 0, audioPtsUs + 1, MediaCodec.BUFFER_FLAG_END_OF_STREAM,
+                        )
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "audio end-of-stream refused (${e.message})")
+                }
+                val audioDeadline = System.currentTimeMillis() + 5_000
+                while (!audioDone && System.currentTimeMillis() < audioDeadline) {
+                    drainAudio(20_000)
+                }
+                try { aenc.stop() } catch (_: Exception) {}
             }
             enc.stop()
             if (mx != null && muxerStarted && writtenBytes > 0) {
@@ -660,13 +903,16 @@ class Recorder(private val ctx: Context) {
             Log.i(
                 TAG,
                 "session ended: $framesFed frames fed, ${fmtSize(writtenBytes)} encoded" +
-                    if (flushed) ", flushed" else ", no flush"
+                    (if (flushed) ", flushed" else ", no flush") +
+                    if (soundInLastFile) ", $audioChunks sound chunks" else ", silent"
             )
         } catch (e: Exception) {
             Log.w(TAG, "finishing the recording failed: ${e.message}", e)
             ok = false
         } finally {
             try { enc.release() } catch (_: Exception) {}
+            try { audioEnc?.release() } catch (_: Exception) {}
+            audio.endRecording()
             try { mx?.release() } catch (_: Exception) {}
             try { pfd?.close() } catch (_: Exception) {}
             pfd = null

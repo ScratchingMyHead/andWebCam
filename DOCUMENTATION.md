@@ -47,6 +47,7 @@ Most camera settings apply as soon as they are changed.
 | Orientation | Landscape | Landscape, Portrait, Landscape 180 or Portrait 270. Applied as EXIF rotation, so browsers and ffmpeg need no transcoding. |
 | Torch / LED | Off | Turns the camera flash on where it is available. |
 | Live sound from the microphone | Off | Adds a Sound button to the pages. Audio is 16 kHz mono PCM, captured only while at least one viewer is listening. Recordings do not include it. |
+| Record sound in MP4 files | Off | Adds an AAC track to recordings, with the same pre-roll as the video. The microphone stays open while streaming so the pre-roll can fill. |
 
 ### Live sound
 
@@ -56,18 +57,17 @@ gesture. The page reads a raw 16 kHz mono PCM stream from `/audio` and plays it
 through the browser's AudioContext, keeping about 200 ms of buffer. The button
 turns blue while listening; pressing it again mutes.
 
-The microphone is opened when the first listener connects and closed a few
-seconds after the last one leaves, so it is never captured with nobody
-listening. The phone asks for the microphone permission on first run alongside
-the camera. If the permission is refused, the Sound button is not offered and
-`/api/status` reports why in `audio.error`.
+The microphone is opened when the first listener connects, or for the whole
+time streaming is on when **Record sound in MP4 files** is enabled, and closes
+a few seconds after the last use. The phone asks for the microphone permission
+on first run alongside the camera. If the permission is refused, the Sound
+button is not offered and `/api/status` reports why in `audio.error`.
 
 Access follows the video: anyone who may watch may also listen, and the relay's
 viewing password covers both. Over the public proxy the phone uploads one audio
 stream per camera and the relay fans it out, just like the video.
 
-Bandwidth is 32 KB/s per listener (256 kbit/s). Recordings are silent; sound is
-live only for now.
+Bandwidth is 32 KB/s per listener (256 kbit/s).
 
 
 ### Access
@@ -133,8 +133,13 @@ These take effect when **Apply service settings** is pressed.
 | Cap, percent of free space | 10 | Recordings may use this percentage of the volume's free space. Oldest videos are deleted first; a running recording stops if it cannot stay under the cap. |
 
 **Record** starts a file and **Stop** finishes it. The recorded file includes
-the previous 10 seconds because the phone keeps a rolling buffer of the frames
-it was already streaming. Recording needs streaming to be on; turning streaming
+the previous 10 seconds (or whatever the pre-roll setting is) because the phone
+keeps a rolling buffer of the frames it was already streaming. With **Record
+sound in MP4 files** on, the same window of microphone audio is encoded as a
+32 kbit/s AAC track in the same MP4, and live sound can be used at the same
+time. Audio capture starts with streaming in that mode, so Android shows its
+microphone indicator until streaming is turned off; recordings are silent when
+the setting is off. Recording needs streaming to be on; turning streaming
 off ends a running recording. The storage location is chosen once on the phone
 screen. Files are written to `video/` inside it as
 `video-YYYYMMDD-HHMMSS.mp4`, or `zoneN-YYYYMMDD-HHMMSS.mp4` for motion

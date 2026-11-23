@@ -28,6 +28,56 @@ import java.util.concurrent.atomic.AtomicLong
  * has a small queue and loses the oldest sound when it falls behind, which
  * keeps a slow link from building up minutes of delay.
  */
+/** The last [maxAgeMs] of PCM chunks, used as a recording's sound pre-roll. */
+class AudioRing(
+    @Volatile var maxAgeMs: Long = 10_000,
+    private var maxBytes: Long = 2L * 1024 * 1024,
+) {
+    class Chunk(val pcm: ByteArray, val timeMs: Long)
+
+    private val lock = Any()
+    private val chunks = ArrayList<Chunk>()
+    private var bytes = 0L
+
+    fun configure(ageMs: Long, byteBudget: Long) = synchronized(lock) {
+        maxAgeMs = ageMs.coerceAtLeast(0L)
+        maxBytes = byteBudget.coerceAtLeast(1L)
+    }
+
+    fun push(pcm: ByteArray) {
+        val t = System.currentTimeMillis()
+        synchronized(lock) {
+            if (maxAgeMs <= 0L) {
+                chunks.clear()
+                bytes = 0
+                return
+            }
+            chunks.add(Chunk(pcm, t))
+            bytes += pcm.size
+            val cutoff = t - maxAgeMs
+            while (chunks.size > 1 && (chunks[0].timeMs < cutoff || bytes > maxBytes)) {
+                bytes -= chunks.removeAt(0).pcm.size
+            }
+        }
+    }
+
+    /** Everything still inside the window, oldest first, then empty the ring. */
+    fun drain(): List<Chunk> = synchronized(lock) {
+        val cutoff = System.currentTimeMillis() - maxAgeMs
+        val out = chunks.filter { it.timeMs >= cutoff }
+        chunks.clear()
+        bytes = 0
+        out
+    }
+
+    fun clear() = synchronized(lock) {
+        chunks.clear()
+        bytes = 0
+    }
+
+    val size: Int get() = synchronized(lock) { chunks.size }
+}
+
 class AudioHub(private val ctx: Context) {
     companion object {
         private const val TAG = "andWebCam"
@@ -108,6 +158,20 @@ class AudioHub(private val ctx: Context) {
     private val clients = CopyOnWriteArrayList<Client>()
     private val chunkCount = AtomicLong()
 
+    /** Sound pre-roll for recordings, filled only while [recordSource] is on. */
+    val ring = AudioRing()
+
+    /** True while the mic must stay open for recording, not just listeners. */
+    @Volatile
+    var recordingSource: Boolean = false
+        private set
+
+    /** Guards switching the recorder's live sink over to a new session. */
+    private val recordLock = Any()
+
+    @Volatile
+    private var sink: ((AudioRing.Chunk) -> Unit)? = null
+
     /** Why the microphone could not be opened, or why it stopped. */
     @Volatile
     var error: String? = null
@@ -162,7 +226,39 @@ class AudioHub(private val ctx: Context) {
         for (c in clients.toList()) remove(c)
     }
 
+    /** Keep the mic, and its pre-roll ring, open even with no live listeners. */
+    fun setRecordSource(on: Boolean) {
+        synchronized(this) {
+            if (recordingSource == on) return
+            recordingSource = on
+            if (on) {
+                stopAt = 0L
+                ensureCapture()
+            } else if (clients.isEmpty()) {
+                stopAt = System.currentTimeMillis() + STOP_GRACE_MS
+            }
+            Unit
+        }
+    }
+
+    /**
+     * Hand the pre-roll to a recorder and route later chunks to [onChunk].
+     * Installing both under one lock means no chunk can fall between the
+     * ring's drain and the live sink.
+     */
+    fun beginRecording(onChunk: (AudioRing.Chunk) -> Unit): List<AudioRing.Chunk> =
+        synchronized(recordLock) {
+            val pre = ring.drain()
+            sink = onChunk
+            pre
+        }
+
+    fun endRecording() = synchronized(recordLock) { sink = null }
+
+    fun configureRing(ageMs: Long, byteBudget: Long) = ring.configure(ageMs, byteBudget)
+
     fun shutdown() {
+        recordingSource = false
         disconnectAll()
         stopAt = System.currentTimeMillis()
     }
@@ -226,10 +322,11 @@ class AudioHub(private val ctx: Context) {
         try {
             while (true) {
                 val now = System.currentTimeMillis()
-                if (clients.isEmpty()) {
+                if (clients.isEmpty() && !recordingSource) {
                     // Either nobody has ever listened (stopAt == 0, which
                     // closes the mic as soon as it is opened) or the grace
-                    // period after the last listener has run out.
+                    // period after the last listener has run out. Recording
+                    // keeps it open even with no listeners at all.
                     if (stopAt == 0L || now >= stopAt) break
                 }
                 val n = rec.read(buf, 0, buf.size)
@@ -245,7 +342,10 @@ class AudioHub(private val ctx: Context) {
                 if (n == 0) continue
                 chunkCount.incrementAndGet()
                 val copy = buf.copyOf(n)
+                val chunk = AudioRing.Chunk(copy, System.currentTimeMillis())
                 for (c in clients) c.offer(copy)
+                if (recordingSource) ring.push(copy)
+                synchronized(recordLock) { sink?.invoke(chunk) }
             }
         } catch (e: Exception) {
             error = "the microphone stopped: ${e.message}"
