@@ -375,6 +375,7 @@ func (r *relay) handleProxy(w http.ResponseWriter, req *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				wroteHeader = true
 			}
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if _, err := w.Write(data); err != nil {
 				return
 			}

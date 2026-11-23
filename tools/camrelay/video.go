@@ -104,6 +104,7 @@ func (cam *camera) clearVideo(h *videoHub) {
 // videoUpstream owns the single request socket that carries frames from the
 // phone. It publishes headers/frames to the hub and closes it when finished.
 func (r *relay) videoUpstream(cam *camera, h *videoHub, headers map[string]string) {
+	log.Printf("cam %s: video upstream starting id=%d", cam.id, h.id)
 	msg := openMsg{
 		Type: "open", ID: h.id,
 		Method: http.MethodGet, Path: "/video",
@@ -138,13 +139,19 @@ func (r *relay) videoUpstream(cam *camera, h *videoHub, headers map[string]strin
 	_ = phone.WriteMessage(websocket.TextMessage, []byte(`{"type":"end"}`))
 
 	_ = phone.SetReadDeadline(time.Now().Add(90 * time.Second))
+	frames := 0
 	for {
 		mt, data, err := phone.ReadMessage()
 		_ = phone.SetReadDeadline(time.Now().Add(90 * time.Second))
 		if err != nil {
+			log.Printf("cam %s: video upstream ended: %v (%d frames)", cam.id, err, frames)
 			return
 		}
 		if mt == websocket.BinaryMessage {
+			if frames == 0 {
+				log.Printf("cam %s: video upstream first frame (%d bytes)", cam.id, len(data))
+			}
+			frames++
 			h.broadcast(data)
 			continue
 		}
@@ -164,13 +171,17 @@ func (r *relay) videoUpstream(cam *camera, h *videoHub, headers map[string]strin
 // handleSharedVideo attaches one browser viewer to the camera's video hub.
 func (r *relay) handleSharedVideo(w http.ResponseWriter, req *http.Request, cam *camera, headers map[string]string) {
 	h, fresh := cam.getOrCreateVideo(r, headers)
+	log.Printf("cam %s: video viewer attached (fresh=%v, hub=%d)", cam.id, fresh, h.id)
 	if fresh {
 		go r.videoUpstream(cam, h, headers)
 	}
 
 	c := &videoClient{
 		headers: make(chan responseMsg, 1),
-		frames:  make(chan []byte, 2),
+		// The phone sends a JPEG in several 16 KB chunks. A two-slot queue
+		// drops fragments of the same frame, so browsers never see a whole
+		// image; this holds a few seconds of chunks instead.
+		frames: make(chan []byte, 256),
 	}
 	h.add(c)
 	defer func() {
@@ -207,6 +218,7 @@ func (r *relay) handleSharedVideo(w http.ResponseWriter, req *http.Request, cam 
 	for {
 		select {
 		case frame := <-c.frames:
+			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(30 * time.Second))
 			if _, err := w.Write(frame); err != nil {
 				return
 			}
@@ -219,7 +231,10 @@ func (r *relay) handleSharedVideo(w http.ResponseWriter, req *http.Request, cam 
 			for {
 				select {
 				case frame := <-c.frames:
-					_, _ = w.Write(frame)
+					_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(30 * time.Second))
+					if _, err := w.Write(frame); err != nil {
+						return
+					}
 					if flusher != nil {
 						flusher.Flush()
 					}
