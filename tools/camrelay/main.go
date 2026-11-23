@@ -325,8 +325,18 @@ func (r *relay) handleProxy(w http.ResponseWriter, req *http.Request) {
 
 	wroteHeader := false
 	flusher, _ := w.(http.Flusher)
+	// Apache does not tell the backend when a browser goes away from a
+	// never-ending stream, so cap how long one proxied request may live. The
+	// viewer page refreshes its source well before this, and stale streams
+	// are guaranteed to close.
+	streamDeadline := time.Now().Add(120 * time.Second)
+	_ = phone.SetReadDeadline(time.Now().Add(90 * time.Second))
 	for {
+		if time.Now().After(streamDeadline) {
+			return
+		}
 		mt, data, err := phone.ReadMessage()
+		_ = phone.SetReadDeadline(time.Now().Add(90 * time.Second))
 		if err != nil {
 			if !wroteHeader {
 				http.Error(w, "phone connection failed", http.StatusBadGateway)
@@ -338,7 +348,9 @@ func (r *relay) handleProxy(w http.ResponseWriter, req *http.Request) {
 				w.WriteHeader(http.StatusOK)
 				wroteHeader = true
 			}
-			_, _ = w.Write(data)
+			if _, err := w.Write(data); err != nil {
+				return
+			}
 			if flusher != nil {
 				flusher.Flush()
 			}
