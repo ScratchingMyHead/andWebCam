@@ -35,7 +35,10 @@ install -m 0640 -o util -g util /path/to/token /etc/camrelay/token
 ```
 
 Keep the token identical to the one entered in the phone's **Public proxy**
-settings. Viewing passwords are sent by the phone at registration and are
+settings. If the token is lost, read it from that settings field (it is masked
+but can be copied) or from `publicFeed.token` in `/api/status` as an admin; it
+is generated once on first run and is not cleared when the Public URL is
+blanked. Viewing passwords are sent by the phone at registration and are
 stored only in memory; if one is set, the daemon asks for HTTP Basic auth
 before proxying anything for that camera.
 

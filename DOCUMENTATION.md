@@ -59,7 +59,7 @@ The **Public proxy** section has three further settings:
 | Setting | Default | What it does |
 | --- | --- | --- |
 | Public URL | Empty | The public address of this camera, e.g. `https://cam2.yourhost.com/`. Blank disables the proxy. |
-| Proxy token | Generated on first run | Shared secret sent to the relay. Copy it into the relay's token file; the relay rejects a different token. |
+| Proxy token | Generated on first run | Shared secret sent to the relay. Copy it into the relay's token file; the relay rejects a different token. It is kept even when the Public URL is blank, and is shown in this field (masked) or in `publicFeed.token` from `/api/status` for admins. |
 | Viewing password | Empty | If set, the relay asks for HTTP Basic auth before serving this camera. Blank means no relay-level password; the app's own admin password still applies. |
 
 ### Public proxy
