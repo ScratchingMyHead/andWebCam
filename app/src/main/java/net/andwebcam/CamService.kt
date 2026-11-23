@@ -388,6 +388,24 @@ class CamService : Service(), HttpServer.Host {
         }
     }
 
+    private val signalWords = listOf("very poor", "poor", "fair", "good", "excellent")
+
+    private fun wifiBars(rssi: Int): Int = when {
+        rssi >= -50 -> 4
+        rssi >= -60 -> 3
+        rssi >= -67 -> 2
+        rssi >= -75 -> 1
+        else -> 0
+    }
+
+    private fun mobileBars(dbm: Int): Int = when {
+        dbm >= -80 -> 4
+        dbm >= -90 -> 3
+        dbm >= -100 -> 2
+        dbm >= -110 -> 1
+        else -> 0
+    }
+
     /** Wi-Fi RSSI or cellular level of the link the phone is actually using. */
     @Suppress("DEPRECATION")
     private fun signalText(): String {
@@ -400,17 +418,17 @@ class CamService : Service(), HttpServer.Host {
             } catch (e: Exception) {
                 null
             }
-            return if (rssi != null) "Wi-Fi $rssi dBm" else "Wi-Fi"
+            return if (rssi == null) "Wi-Fi" else
+                "Wi-Fi $rssi dBm (${signalWords[wifiBars(rssi)]})"
         }
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-            val dbm = try {
-                val ss = caps.signalStrength ?: return "Mobile"
-                // The build's SDK stub hides getDbm(); the device has it.
-                ss.javaClass.getMethod("getDbm").invoke(ss) as? Int
-            } catch (e: Exception) {
-                null
-            }
-            return if (dbm != null) "Mobile $dbm dBm" else "Mobile"
+            val ss = caps.signalStrength ?: return "Mobile"
+            // The build's SDK stub hides these methods; the device has them.
+            val level = try { ss.javaClass.getMethod("getLevel").invoke(ss) as? Int } catch (e: Exception) { null }
+            val dbm = try { ss.javaClass.getMethod("getDbm").invoke(ss) as? Int } catch (e: Exception) { null }
+            val bars = level?.coerceIn(0, 4) ?: dbm?.let { mobileBars(it) }
+            val rating = if (bars != null) " (${signalWords[bars]})" else ""
+            return if (dbm != null) "Mobile $dbm dBm$rating" else "Mobile$rating"
         }
         return "none"
     }
