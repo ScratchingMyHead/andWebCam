@@ -88,6 +88,40 @@ type camera struct {
 	mu       sync.Mutex
 	online   atomic.Bool
 	lastSeen time.Time
+
+	// Request sockets are short-lived but a viewer's MJPEG stream is one of
+	// them. They must be closed when the phone leaves or the browser sits on
+	// a connection that never ends.
+	reqMu sync.Mutex
+	reqs  map[*websocket.Conn]struct{}
+}
+
+func (cam *camera) addReq(c *websocket.Conn) {
+	cam.reqMu.Lock()
+	defer cam.reqMu.Unlock()
+	if cam.reqs == nil {
+		cam.reqs = make(map[*websocket.Conn]struct{})
+	}
+	cam.reqs[c] = struct{}{}
+}
+
+func (cam *camera) removeReq(c *websocket.Conn) {
+	cam.reqMu.Lock()
+	defer cam.reqMu.Unlock()
+	delete(cam.reqs, c)
+}
+
+func (cam *camera) closeReqs() {
+	cam.reqMu.Lock()
+	open := make([]*websocket.Conn, 0, len(cam.reqs))
+	for c := range cam.reqs {
+		open = append(open, c)
+	}
+	cam.reqs = nil
+	cam.reqMu.Unlock()
+	for _, c := range open {
+		c.Close()
+	}
 }
 
 type pendingReq struct {
@@ -263,6 +297,17 @@ func (r *relay) handleProxy(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	defer phone.Close()
+	// When the browser goes away (timeout, tab closed), stop reading from the
+	// phone. Otherwise Apache workers and phone viewers accumulate forever.
+	finished := make(chan struct{})
+	defer close(finished)
+	go func() {
+		select {
+		case <-req.Context().Done():
+			phone.Close()
+		case <-finished:
+		}
+	}()
 
 	for off := 0; off < len(body); off += chunkSize {
 		end := off + chunkSize
@@ -360,6 +405,7 @@ func (r *relay) handleControl(w http.ResponseWriter, req *http.Request) {
 		// new connection take over rather than locking the camera out.
 		log.Printf("cam %s: taking over stale registration", hello.ID)
 		old.online.Store(false)
+		old.closeReqs()
 		old.writeMu.Lock()
 		oldConn := old.conn
 		old.conn = nil
@@ -382,6 +428,7 @@ func (r *relay) handleControl(w http.ResponseWriter, req *http.Request) {
 		}
 		r.mu.Unlock()
 		cam.online.Store(false)
+		cam.closeReqs()
 		log.Printf("cam %s: phone disconnected", cam.id)
 		conn.Close()
 	}()
@@ -433,6 +480,8 @@ func (r *relay) handleRequestSocket(w http.ResponseWriter, req *http.Request, id
 	if err != nil {
 		return
 	}
+	pr.cam.addReq(conn)
+	defer pr.cam.removeReq(conn)
 	select {
 	case pr.paired <- conn:
 	case <-pr.done:

@@ -480,6 +480,7 @@ var vidRetry = null;
 var vidLoad = null;
 var vidPoll = null;
 var vidMisses = 0;
+var vidStartedAt = 0;
 // While the first frame is on its way the image element would otherwise show a
 // broken icon and its alt text, so it is hidden behind a plain placeholder until
 // a frame has actually been decoded (the load event is not delivered for
@@ -503,6 +504,7 @@ function setLoading(on) {
 function startVideo() {
   var img = el('vid');
   vidMisses = 0;
+  vidStartedAt = Date.now();
   img.style.display = '';
   setLoading(true);
   img.src = '/video?t=' + Date.now();
@@ -513,6 +515,7 @@ function stopVideo() {
   clearInterval(vidPoll);
   clearTimeout(vidLoad);
   vidMisses = 0;
+  vidStartedAt = 0;
   var img = el('vid');
   img.removeAttribute('src');
   img.style.display = 'none';
@@ -533,6 +536,9 @@ function applyVideo(s) {
 // again changes nothing. Reloading the source is what stopping and starting did
 // by hand, so that is what is done here once a few polls have seen no frame.
 function checkVideo() {
+  // Once a frame has decoded, naturalWidth stays set even if the stream dies.
+  // Refreshing periodically recovers from a silent stall after that point.
+  if (vidStartedAt && Date.now() - vidStartedAt > 90000) { startVideo(); return; }
   if (el('vid').naturalWidth > 0) { vidMisses = 0; return; }
   if (++vidMisses >= 3) { startVideo(); }
 }
