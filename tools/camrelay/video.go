@@ -121,6 +121,19 @@ func (r *relay) videoUpstream(cam *camera, h *videoHub, headers map[string]strin
 	defer h.finish()
 	defer cam.clearVideo(h)
 
+	// When the last browser viewer leaves (or times out), finish() closes
+	// h.done. Close the upstream socket too, or the phone keeps streaming
+	// into a hub that nobody is reading.
+	watching := make(chan struct{})
+	defer close(watching)
+	go func() {
+		select {
+		case <-h.done:
+			phone.Close()
+		case <-watching:
+		}
+	}()
+
 	_ = phone.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	_ = phone.WriteMessage(websocket.TextMessage, []byte(`{"type":"end"}`))
 
