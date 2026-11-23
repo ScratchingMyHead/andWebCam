@@ -232,6 +232,7 @@ class PublicFeed {
             }
         )
 
+        var local: HttpsURLConnection? = null
         try {
             if (!opened.await(10, TimeUnit.SECONDS)) return
             if (!ended.await(30, TimeUnit.SECONDS)) return
@@ -242,6 +243,7 @@ class PublicFeed {
             val urlText = "https://127.0.0.1:${Prefs.port}$path" +
                 (if (query.isNotEmpty()) "?$query" else "")
             val conn = URL(urlText).openConnection() as HttpsURLConnection
+            local = conn
             conn.sslSocketFactory = localSsl.socketFactory
             conn.hostnameVerifier = localHostname
             conn.requestMethod = method
@@ -291,10 +293,12 @@ class PublicFeed {
                 ref.get()?.send("proxy error".toByteArray().toByteString())
                 ref.get()?.send(JSONObject().put("type", "end").toString())
             } catch (_: Exception) {}
+        } finally {
+            // The relay closes the request socket after reading "end"; here
+            // we only need to release the local viewer connection, or stale
+            // MJPEG viewers accumulate on the phone.
+            local?.disconnect()
         }
-        // Do not close here: the relay closes the socket after reading the
-        // final "end" message. Cancelling immediately can discard the last
-        // response frames before the relay has read them.
     }
 
     private fun gone(ws: WebSocket, reason: String) {
