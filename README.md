@@ -10,7 +10,10 @@ entirely from a browser.
 
 - **Live stream** — MJPEG over HTTPS at `/video`, with a minimal public page
   when the admin UI is on a separate path. The public page has pause, snapshot
-  and Fit / Width / Height / 1:1 controls in a bar that hides when idle.
+  and Fit / Width / Height / 1:1 controls in a bar that hides when idle, plus
+  an optional Sound button for live microphone audio.
+- **Live sound** — opt-in 16 kHz mono audio at `/audio`, played by the browser's
+  AudioContext. The microphone is open only while someone is listening.
 - **Camera controls** — front or back camera, resolution, frame rate, JPEG
   quality, zoom, orientation and torch, all adjustable while streaming.
 - **Recording** — MP4 files on the phone with a 10-second pre-roll, a storage
@@ -29,7 +32,8 @@ entirely from a browser.
 
 - An arm64-v8a Android phone (Android 9 / API 28 or newer), reachable from
   wherever you plan to watch.
-- Camera permission. Notifications permission on Android 13+ for the
+- Camera permission. Microphone permission for live sound (optional).
+  Notifications permission on Android 13+ for the
   foreground service. Battery-optimisation exemption is recommended so the
   camera survives with the screen off.
 - To build from source: JDK 17, Android SDK 34, release signing properties in

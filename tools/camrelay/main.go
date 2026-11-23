@@ -95,9 +95,10 @@ type camera struct {
 	reqMu sync.Mutex
 	reqs  map[*websocket.Conn]struct{}
 
-	// A single upstream /video request feeds all viewers of this camera.
-	videoMu sync.Mutex
-	video   *videoHub
+	// A single upstream request per stream path feeds all viewers of that
+	// stream: the MJPEG video and the live sound.
+	streamMu sync.Mutex
+	streams  map[string]*streamHub
 }
 
 func (cam *camera) addReq(c *websocket.Conn) {
@@ -300,11 +301,11 @@ func (r *relay) handleProxy(w http.ResponseWriter, req *http.Request) {
 		delete(headers, "Authorization")
 	}
 
-	// The MJPEG stream is shared: one upstream request per camera, with every
-	// viewer reading from the same frames. Without this, each viewer uploads
-	// its own copy of the stream from the phone.
-	if req.Method == http.MethodGet && req.URL.Path == "/video" {
-		r.handleSharedVideo(w, req, cam, headers)
+	// The video and sound streams are shared: one upstream request per camera
+	// and path, with every viewer reading from the same chunks. Without this,
+	// each viewer uploads its own copy of the stream from the phone.
+	if req.Method == http.MethodGet && (req.URL.Path == "/video" || req.URL.Path == "/audio") {
+		r.handleSharedStream(w, req, cam, headers)
 		return
 	}
 

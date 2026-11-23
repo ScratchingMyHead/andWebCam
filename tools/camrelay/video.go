@@ -11,26 +11,27 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// One upstream /video request per camera feeds all viewers. Each viewer gets
-// the response headers once and a bounded channel of frames; a slow viewer
-// drops old frames instead of holding up the camera.
-type videoClient struct {
+// One upstream request per camera and stream path feeds every viewer of that
+// stream. Each viewer gets the response headers once and a bounded channel of
+// chunks; a slow viewer drops old chunks instead of holding up the camera.
+type streamClient struct {
 	headers chan responseMsg
-	frames  chan []byte
+	chunks  chan []byte
 }
 
-type videoHub struct {
+type streamHub struct {
 	id      int64
+	path    string
 	mu      sync.Mutex
-	clients map[*videoClient]struct{}
+	clients map[*streamClient]struct{}
 	headers *responseMsg
 	done    chan struct{}
 	once    sync.Once
 }
 
-func (h *videoHub) finish() { h.once.Do(func() { close(h.done) }) }
+func (h *streamHub) finish() { h.once.Do(func() { close(h.done) }) }
 
-func (h *videoHub) add(c *videoClient) {
+func (h *streamHub) add(c *streamClient) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.clients[c] = struct{}{}
@@ -40,14 +41,14 @@ func (h *videoHub) add(c *videoClient) {
 }
 
 // remove returns true when the last viewer has gone.
-func (h *videoHub) remove(c *videoClient) bool {
+func (h *streamHub) remove(c *streamClient) bool {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	delete(h.clients, c)
 	return len(h.clients) == 0
 }
 
-func (h *videoHub) setHeaders(m responseMsg) {
+func (h *streamHub) setHeaders(m responseMsg) {
 	h.mu.Lock()
 	h.headers = &m
 	for c := range h.clients {
@@ -59,68 +60,75 @@ func (h *videoHub) setHeaders(m responseMsg) {
 	h.mu.Unlock()
 }
 
-func (h *videoHub) broadcast(frame []byte) {
+func (h *streamHub) broadcast(chunk []byte) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	for c := range h.clients {
 		select {
-		case c.frames <- frame:
+		case c.chunks <- chunk:
 		default:
 			select {
-			case <-c.frames:
+			case <-c.chunks:
 			default:
 			}
 			select {
-			case c.frames <- frame:
+			case c.chunks <- chunk:
 			default:
 			}
 		}
 	}
 }
 
-func (cam *camera) getOrCreateVideo(r *relay, headers map[string]string) (*videoHub, bool) {
-	cam.videoMu.Lock()
-	defer cam.videoMu.Unlock()
-	if cam.video != nil {
-		return cam.video, false
+// getOrCreateStream returns the hub for one path on this camera, creating it
+// when nobody is watching yet.
+func (cam *camera) getOrCreateStream(r *relay, path string) (*streamHub, bool) {
+	cam.streamMu.Lock()
+	defer cam.streamMu.Unlock()
+	if cam.streams == nil {
+		cam.streams = make(map[string]*streamHub)
 	}
-	h := &videoHub{
+	if h := cam.streams[path]; h != nil {
+		return h, false
+	}
+	h := &streamHub{
 		id:      r.next.Add(1),
-		clients: make(map[*videoClient]struct{}),
+		path:    path,
+		clients: make(map[*streamClient]struct{}),
 		done:    make(chan struct{}),
 	}
-	cam.video = h
+	cam.streams[path] = h
 	return h, true
 }
 
-func (cam *camera) clearVideo(h *videoHub) {
-	cam.videoMu.Lock()
-	if cam.video == h {
-		cam.video = nil
+func (cam *camera) clearStream(path string, h *streamHub) {
+	cam.streamMu.Lock()
+	if cam.streams[path] == h {
+		delete(cam.streams, path)
 	}
-	cam.videoMu.Unlock()
+	cam.streamMu.Unlock()
 }
 
-// videoUpstream owns the single request socket that carries frames from the
-// phone. It publishes headers/frames to the hub and closes it when finished.
-func (r *relay) videoUpstream(cam *camera, h *videoHub, headers map[string]string) {
-	log.Printf("cam %s: video upstream starting id=%d", cam.id, h.id)
+// streamUpstream owns the single request socket that carries a stream from the
+// phone. It publishes headers and chunks to the hub and closes it when done.
+func (r *relay) streamUpstream(cam *camera, h *streamHub, headers map[string]string) {
+	name := strings.TrimPrefix(h.path, "/")
+	log.Printf("cam %s: %s upstream starting id=%d", cam.id, name, h.id)
 	msg := openMsg{
 		Type: "open", ID: h.id,
-		Method: http.MethodGet, Path: "/video",
+		Method: http.MethodGet, Path: h.path,
 		Headers: headers,
 	}
 	phone, cleanup, err := r.openUpstream(cam, msg)
 	if err != nil {
-		log.Printf("cam %s: video upstream failed: %v", cam.id, err)
+		log.Printf("cam %s: %s upstream failed: %v", cam.id, name, err)
 		h.finish()
-		cam.clearVideo(h)
+		cam.clearStream(h.path, h)
 		return
 	}
 	defer cleanup()
 	defer phone.Close()
 	defer h.finish()
-	defer cam.clearVideo(h)
+	defer cam.clearStream(h.path, h)
 
 	// When the last browser viewer leaves (or times out), finish() closes
 	// h.done. Close the upstream socket too, or the phone keeps streaming
@@ -139,19 +147,19 @@ func (r *relay) videoUpstream(cam *camera, h *videoHub, headers map[string]strin
 	_ = phone.WriteMessage(websocket.TextMessage, []byte(`{"type":"end"}`))
 
 	_ = phone.SetReadDeadline(time.Now().Add(90 * time.Second))
-	frames := 0
+	chunks := 0
 	for {
 		mt, data, err := phone.ReadMessage()
 		_ = phone.SetReadDeadline(time.Now().Add(90 * time.Second))
 		if err != nil {
-			log.Printf("cam %s: video upstream ended: %v (%d frames)", cam.id, err, frames)
+			log.Printf("cam %s: %s upstream ended: %v (%d chunks)", cam.id, name, err, chunks)
 			return
 		}
 		if mt == websocket.BinaryMessage {
-			if frames == 0 {
-				log.Printf("cam %s: video upstream first frame (%d bytes)", cam.id, len(data))
+			if chunks == 0 {
+				log.Printf("cam %s: %s upstream first chunk (%d bytes)", cam.id, name, len(data))
 			}
-			frames++
+			chunks++
 			h.broadcast(data)
 			continue
 		}
@@ -168,26 +176,30 @@ func (r *relay) videoUpstream(cam *camera, h *videoHub, headers map[string]strin
 	}
 }
 
-// handleSharedVideo attaches one browser viewer to the camera's video hub.
-func (r *relay) handleSharedVideo(w http.ResponseWriter, req *http.Request, cam *camera, headers map[string]string) {
-	h, fresh := cam.getOrCreateVideo(r, headers)
-	log.Printf("cam %s: video viewer attached (fresh=%v, hub=%d)", cam.id, fresh, h.id)
+// handleSharedStream attaches one browser viewer to the camera's stream hub
+// for this request path.
+func (r *relay) handleSharedStream(w http.ResponseWriter, req *http.Request, cam *camera, headers map[string]string) {
+	path := req.URL.Path
+	name := strings.TrimPrefix(path, "/")
+	h, fresh := cam.getOrCreateStream(r, path)
+	log.Printf("cam %s: %s viewer attached (fresh=%v, hub=%d)", cam.id, name, fresh, h.id)
 	if fresh {
-		go r.videoUpstream(cam, h, headers)
+		go r.streamUpstream(cam, h, headers)
 	}
 
-	c := &videoClient{
+	c := &streamClient{
 		headers: make(chan responseMsg, 1),
 		// The phone sends a JPEG in several 16 KB chunks. A two-slot queue
 		// drops fragments of the same frame, so browsers never see a whole
-		// image; this holds a few seconds of chunks instead.
-		frames: make(chan []byte, 256),
+		// image; this holds a few seconds of chunks instead. Sound arrives
+		// in 20 ms pieces, where the same queue just means more slack.
+		chunks: make(chan []byte, 256),
 	}
 	h.add(c)
 	defer func() {
 		if h.remove(c) {
 			h.finish()
-			cam.clearVideo(h)
+			cam.clearStream(path, h)
 		}
 	}()
 
@@ -198,7 +210,7 @@ func (r *relay) handleSharedVideo(w http.ResponseWriter, req *http.Request, cam 
 		http.Error(w, "camera offline", http.StatusServiceUnavailable)
 		return
 	case <-time.After(15 * time.Second):
-		http.Error(w, "no frames from camera", http.StatusGatewayTimeout)
+		http.Error(w, "no data from camera", http.StatusGatewayTimeout)
 		return
 	}
 
@@ -213,26 +225,34 @@ func (r *relay) handleSharedVideo(w http.ResponseWriter, req *http.Request, cam 
 		flusher.Flush()
 	}
 
-	deadline := time.NewTimer(120 * time.Second)
-	defer deadline.Stop()
+	// Video is cut after two minutes because Apache never tells the backend
+	// when a browser goes away; the page reopens the stream before then.
+	// Sound is continuous: its writes fail within a frame or two of a
+	// disconnect, so it needs no deadline of its own and must not be cut.
+	var deadline <-chan time.Time
+	if path == "/video" {
+		t := time.NewTimer(120 * time.Second)
+		defer t.Stop()
+		deadline = t.C
+	}
 	for {
 		select {
-		case frame := <-c.frames:
+		case chunk := <-c.chunks:
 			_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(30 * time.Second))
-			if _, err := w.Write(frame); err != nil {
+			if _, err := w.Write(chunk); err != nil {
 				return
 			}
 			if flusher != nil {
 				flusher.Flush()
 			}
 		case <-h.done:
-			// The upstream can finish just after publishing its last frames;
+			// The upstream can finish just after publishing its last chunks;
 			// flush anything already queued before closing the viewer.
 			for {
 				select {
-				case frame := <-c.frames:
+				case chunk := <-c.chunks:
 					_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(30 * time.Second))
-					if _, err := w.Write(frame); err != nil {
+					if _, err := w.Write(chunk); err != nil {
 						return
 					}
 					if flusher != nil {
@@ -242,7 +262,7 @@ func (r *relay) handleSharedVideo(w http.ResponseWriter, req *http.Request, cam 
 					return
 				}
 			}
-		case <-deadline.C:
+		case <-deadline:
 			return
 		}
 	}

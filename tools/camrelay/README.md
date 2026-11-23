@@ -136,9 +136,12 @@ The unit runs as `util`, reads the token file and passes
 - The phone replies with `{"type":"resp","status":200,"headers":{...}}`, then
   binary messages of response bytes, then `{"type":"end"}`. Responses are
   streamed, so MJPEG works.
-- `GET /video` is special: the relay opens **one** upstream stream per camera
-  and fans its frames out to every viewer. Multiplying the stream by the number
-  of viewers would saturate the phone's uplink.
+- `GET /video` and `GET /audio` are special: the relay opens **one** upstream
+  stream per camera and path, and fans its chunks out to every viewer.
+  Multiplying the stream by the number of viewers would saturate the phone's
+  uplink. The video viewer is closed after two minutes (Apache never reports a
+  browser disconnect for an endless stream); sound is continuous and is not
+  cut that way.
 - The phone pings every ~20 s; the daemon echoes `pong`. No traffic for 70 s
   closes the control socket so a stale registration cannot block a reconnect.
 

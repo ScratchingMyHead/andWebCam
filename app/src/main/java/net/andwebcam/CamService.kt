@@ -74,6 +74,7 @@ class CamService : Service(), HttpServer.Host {
     }
 
     private lateinit var hub: StreamHub
+    private lateinit var audio: AudioHub
     private lateinit var camera: CameraController
     private lateinit var scaler: StreamScaler
     private val lastFull = java.util.concurrent.atomic.AtomicReference<ByteArray?>()
@@ -149,6 +150,12 @@ class CamService : Service(), HttpServer.Host {
         publicFeed.configure(Prefs.publicFeedUrl, Prefs.publicFeedToken, Prefs.viewerPassword)
         hub = StreamHub()
         State.clients = 0
+        audio = AudioHub(this)
+        audio.onClientsChanged = { count ->
+            mainHandler.post {
+                if (started) updateLocks(hub.count > 0 || count > 0 || motion.enabled || publicFeed.isEnabled())
+            }
+        }
         scaler = StreamScaler({ jpeg -> hub.broadcast(jpeg) }, { hub.count > 0 })
         recorder.ringRef = ring
         recorder.onStopped = {
@@ -201,7 +208,7 @@ class CamService : Service(), HttpServer.Host {
                 scheduleCameraRetry()
             },
         )
-        server = HttpServer(this, hub, this, Tls.dualSslContext(this))
+        server = HttpServer(this, hub, audio, this, Tls.dualSslContext(this))
         // The key managers read the certificate on each handshake, so a
         // renewal or a switch needs no restart: rebuilding the HTTP server
         // would discard every logged-in session.
@@ -414,7 +421,7 @@ class CamService : Service(), HttpServer.Host {
 
     private fun restartPublicServer() {
         publicServer?.stop()
-        publicServer = HttpServer(this, hub, this, Tls.publicSslContext(this))
+        publicServer = HttpServer(this, hub, audio, this, Tls.publicSslContext(this))
         val port = Prefs.publicPort
         if (!publicServer!!.start(port)) {
             Log.w(TAG, "Could not bind the public HTTPS port $port")
@@ -613,6 +620,7 @@ class CamService : Service(), HttpServer.Host {
             if (hub.count > 0) camera.start()
         } else {
             hub.disconnectAll()
+            audio.disconnectAll()
             mainHandler.removeCallbacks(idleStop)
             // The webcam is off, so it stops recording too; the file is
             // finished first, and the camera stays open only for motion.
@@ -632,6 +640,7 @@ class CamService : Service(), HttpServer.Host {
         mainHandler.removeCallbacks(idleStop)
         mainHandler.removeCallbacks(refreshNet)
         hub.disconnectAll()
+        audio.shutdown()
         publicFeed.shutdown()
         mdns?.stop()
         mdns = null
@@ -678,6 +687,15 @@ class CamService : Service(), HttpServer.Host {
             "orientation" to Prefs.orientation,
             "clients" to hub.count,
             "frames" to hub.frames,
+            // Live sound: the page offers a Sound button only when this is
+            // turned on, and says why if the mic is unavailable.
+            "audio" to mapOf(
+                "enabled" to Prefs.audioEnabled,
+                "available" to AudioHub.hasPermission(this),
+                "listening" to audio.count,
+                "capturing" to audio.capturing,
+                "error" to audio.error,
+            ),
             "width" to sz.width,
             "height" to sz.height,
             "streaming" to streamingEnabled,
@@ -750,6 +768,10 @@ class CamService : Service(), HttpServer.Host {
                 "motionLightGate" -> motion.setLightGate(v.toBoolean())
                 "mdnsEnabled" -> if (Prefs.mdnsEnabled != v.toBoolean()) {
                     Prefs.mdnsEnabled = v.toBoolean(); restartMdns = true
+                }
+                "audioEnabled" -> {
+                    Prefs.audioEnabled = v.toBoolean()
+                    if (!Prefs.audioEnabled) audio.disconnectAll()
                 }
                 "publicFeedUrl" -> {
                     Prefs.publicFeedUrl = v
@@ -1164,7 +1186,15 @@ class CamService : Service(), HttpServer.Host {
     private fun startForegroundCompat() {
         val n = buildNotification()
         if (Build.VERSION.SDK_INT >= 29) {
-            startForeground(NOTIF_ID, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA)
+            // Declare the microphone type only once the permission exists: on
+            // Android 14 starting a microphone foreground service without it
+            // throws. Audio capture is unavailable until the permission is
+            // granted, and the service is restarted when it is.
+            var type = ServiceInfo.FOREGROUND_SERVICE_TYPE_CAMERA
+            if (Build.VERSION.SDK_INT >= 30 && AudioHub.hasPermission(this)) {
+                type = type or ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE
+            }
+            startForeground(NOTIF_ID, n, type)
         } else {
             startForeground(NOTIF_ID, n)
         }

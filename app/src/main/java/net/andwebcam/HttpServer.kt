@@ -31,6 +31,7 @@ import javax.net.ssl.SSLServerSocket
 class HttpServer(
     private val ctx: Context,
     private val hub: StreamHub,
+    private val audio: AudioHub,
     private val host: Host,
     sslContext: SSLContext = Tls.sslContext(ctx),
 ) {
@@ -636,6 +637,18 @@ class HttpServer(
                 }
             }
 
+            method == "GET" && path == "/audio" -> {
+                when {
+                    role == Role.NONE -> unauthorized(output)
+                    !Prefs.audioEnabled ->
+                        respond(output, 503, "text/plain", "audio is turned off".toByteArray())
+                    !AudioHub.hasPermission(ctx) ->
+                        respond(output, 503, "text/plain", "microphone permission is not granted".toByteArray())
+                    !host.isStreaming() -> respond(output, 503, "text/plain", "streaming stopped".toByteArray())
+                    else -> serveAudio(output, queryParam(query, "src") ?: "")
+                }
+            }
+
             // Whoever may watch the stream may also save a frame from it.
             // Stopped streaming means no frame: capturing one anyway opened the
             // camera for a single frame that was often still black.
@@ -689,6 +702,30 @@ class HttpServer(
             return
         }
         val client = hub.add(output, token.ifEmpty { null })
+        try {
+            client.done.await()
+        } catch (_: InterruptedException) {
+        }
+    }
+
+    /**
+     * Live sound: a plain 16 kHz mono PCM16 byte stream, delimited by the
+     * connection closing. No container or codec means the page can queue the
+     * bytes straight into its AudioContext.
+     */
+    private fun serveAudio(output: BufferedOutputStream, token: String) {
+        val header = "HTTP/1.1 200 OK\r\n" +
+            "Content-Type: audio/L16;rate=${AudioHub.SAMPLE_RATE};channels=${AudioHub.CHANNELS}\r\n" +
+            "Cache-Control: no-store\r\n" +
+            "X-Content-Type-Options: nosniff\r\n" +
+            "Connection: close\r\n\r\n"
+        try {
+            output.write(header.toByteArray())
+            output.flush()
+        } catch (e: Exception) {
+            return
+        }
+        val client = audio.add(output, token.ifEmpty { null })
         try {
             client.done.await()
         } catch (_: InterruptedException) {

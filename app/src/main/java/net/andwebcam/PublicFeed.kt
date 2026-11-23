@@ -274,7 +274,11 @@ class PublicFeed {
                     .toString()
             )
             val input = try { conn.inputStream } catch (_: Exception) { conn.errorStream }
-            val buffer = ByteArray(16 * 1024)
+            // A sound stream arrives in 20 ms chunks; the big buffer that
+            // suits JPEG frames would sit on half a second of audio before
+            // sending anything.
+            val audio = conn.contentType?.startsWith("audio/") == true
+            val buffer = ByteArray(if (audio) 3200 else 16 * 1024)
             input?.use { stream ->
                 while (true) {
                     val n = stream.read(buffer)

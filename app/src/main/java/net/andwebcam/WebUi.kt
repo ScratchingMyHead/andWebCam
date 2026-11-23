@@ -61,6 +61,7 @@ object WebUi {
  .paneClose:hover { background:#3a3a3a; color:#fff }
  .iconbtn { display:inline-flex; align-items:center; justify-content:center; padding:8px 10px; background:#333; color:#b9c6d4 }
  .iconbtn:hover:not(:disabled) { background:#3d3d3d; color:#fff }
+ .iconbtn.on { background:#2b6cb0; color:#fff }
  .iconbtn:disabled { opacity:.5; cursor:default }
  .iconbtn svg { width:19px; height:19px; display:block; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
  .snapTop { margin-right:6px }
@@ -146,6 +147,7 @@ object WebUi {
   <span id="who" class="badge locked">...</span>
   <span class="grow"></span>
   <button id="snap" class="iconbtn snapTop hidden" title="Save a snapshot" aria-label="Save a snapshot"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
+  <button id="sound" class="iconbtn hidden" title="Listen to the camera" aria-label="Listen"><svg viewBox="0 0 24 24" aria-hidden="true"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg></button>
   <span class="seg" id="scales">
     <button data-scale="fit" title="Fit the whole frame">Fit</button>
     <button data-scale="w" title="Fit width (drag to pan)">W</button>
@@ -237,6 +239,10 @@ object WebUi {
       <div class="row">
         <label class="check"><input id="s_torch" type="checkbox"> Torch / LED</label>
       </div>
+      <div class="row">
+        <label class="check"><input id="s_audio" type="checkbox"> Live sound from the microphone</label>
+      </div>
+      <p class="hint">Viewers press a Sound button; the microphone is only open while someone listens. Turning this off disconnects them.</p>
 
       <h2>Access</h2>
       <div class="row">
@@ -535,7 +541,7 @@ function applyVideo(s) {
   var want = !!s.streaming;
   if (showingVideo === want) { return; }
   showingVideo = want;
-  if (want) { startVideo(); } else { stopVideo(); }
+  if (want) { startVideo(); } else { stopVideo(); audioStop(); }
 }
 // A stream that stops delivering says nothing about it. A browser that lost the
 // multipart boundary, or a connection that died while the machine was asleep,
@@ -573,6 +579,101 @@ el('vid').onerror = function() {
     vidRetry = setTimeout(startVideo, 1000);
   }
 };
+
+// ---- live sound ----------------------------------------------------------
+// Raw 16 kHz mono PCM from /audio, queued into an AudioContext. Browsers only
+// allow sound after a gesture, so it starts on the button and stays off until
+// pressed, for every viewer.
+var audioOn = false;
+var audioCtx = null;
+var audioNext = 0;
+var audioAbort = null;
+var audioCarry = new Uint8Array(0);
+var audioToken = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+function soundIcon() {
+  el('sound').classList.toggle('on', audioOn);
+  el('sound').title = audioOn ? 'Mute the camera' : 'Listen to the camera';
+}
+
+function audioQueue(pcm) {
+  if (!audioCtx || !pcm.length) { return; }
+  var buf = audioCtx.createBuffer(1, pcm.length, 16000);
+  var ch = buf.getChannelData(0);
+  for (var i = 0; i < pcm.length; i++) { ch[i] = pcm[i] / 32768; }
+  var src = audioCtx.createBufferSource();
+  src.buffer = buf;
+  src.connect(audioCtx.destination);
+  var now = audioCtx.currentTime;
+  // Start a little ahead so the clock cannot overtake the schedule, and
+  // resync if a slow link has built up a noticeable delay.
+  if (audioNext < now + 0.05 || audioNext > now + 1.5) { audioNext = now + 0.12; }
+  src.start(audioNext);
+  audioNext += buf.duration;
+}
+
+function audioBytes(bytes) {
+  var all = new Uint8Array(audioCarry.length + bytes.length);
+  all.set(audioCarry);
+  all.set(bytes, audioCarry.length);
+  var n = all.length & ~1;
+  audioCarry = all.subarray(n);
+  if (!n) { return; }
+  var pcm = new Int16Array(n / 2);
+  for (var i = 0, j = 0; i < n; i += 2, j++) {
+    var v = all[i] | (all[i + 1] << 8);
+    pcm[j] = (v & 0x8000) ? v - 0x10000 : v;
+  }
+  audioQueue(pcm);
+}
+
+async function audioPull() {
+  while (audioOn) {
+    try {
+      var res = await fetch('/audio?src=' + audioToken + '&t=' + Date.now(),
+        { signal: audioAbort.signal, cache: 'no-store' });
+      if (!res.ok || !res.body) { throw new Error('audio ' + res.status); }
+      audioCarry = new Uint8Array(0);
+      var reader = res.body.getReader();
+      while (audioOn) {
+        var r = await reader.read();
+        if (r.done) { break; }
+        audioBytes(r.value);
+      }
+    } catch (e) {
+      if (!audioOn) { return; }
+    }
+    if (!audioOn) { return; }
+    await new Promise(function(r) { setTimeout(r, 800); });
+  }
+}
+
+function audioStart() {
+  if (audioOn) { return; }
+  var AC = window.AudioContext || window.webkitAudioContext;
+  if (!AC) { return; }
+  if (!audioCtx) { audioCtx = new AC(); }
+  audioCtx.resume();
+  audioOn = true;
+  audioNext = 0;
+  audioAbort = new AbortController();
+  soundIcon();
+  audioPull();
+}
+
+function audioStop() {
+  if (!audioOn) { return; }
+  audioOn = false;
+  try { if (audioAbort) { audioAbort.abort(); } } catch (e) {}
+  audioAbort = null;
+  audioNext = 0;
+  if (audioCtx) { try { audioCtx.suspend(); } catch (e) {} }
+  soundIcon();
+}
+
+el('sound').onclick = function() { if (audioOn) { audioStop(); } else { audioStart(); } };
+soundIcon();
+
 // Scaling: fit the whole frame, fit the width, fit the height, or actual size.
 // Anything larger than the viewing area can be dragged to pan around it.
 var scaleMode = 'fit';
@@ -815,6 +916,13 @@ function refresh() {
     el('logoutBtn').classList.toggle('hidden', !s.admin);
     // View-only users may save a frame too: the server already allows them.
     el('snap').classList.toggle('hidden', !s.admin && !s.anonView);
+    // Sound is offered only when the phone says it may be heard; the button
+    // is the gesture the browser's autoplay rule needs, so it is never
+    // started automatically.
+    var canHear = !!(s.audio && s.audio.enabled && s.audio.available) &&
+      s.streaming && !s.locked;
+    el('sound').classList.toggle('hidden', !canHear);
+    if (!canHear) { audioStop(); }
     applyPane();
     if (!s.admin) { return; }
 
@@ -851,6 +959,7 @@ function refresh() {
     if (document.activeElement !== el('s_anon')) { el('s_anon').checked = !!s.anonView; }
     if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
     if (document.activeElement !== el('s_mdns')) { el('s_mdns').checked = s.mdnsEnabled !== false; }
+    if (document.activeElement !== el('s_audio')) { el('s_audio').checked = !!(s.audio && s.audio.enabled); }
     if (document.activeElement !== el('s_adminpath')) { el('s_adminpath').value = s.adminPath || ''; }
     var host = s.host || ((s.serviceName || 'andwebcam') + '.local');
     el('s_adminpath').placeholder = 'e.g. admin for ' + host + '/admin';
@@ -913,6 +1022,7 @@ el('s_torch').onchange = function() { setSetting('torch', this.checked); };
 el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
 el('s_mdns').onchange = function() { setSetting('mdnsEnabled', this.checked); };
+el('s_audio').onchange = function() { setSetting('audioEnabled', this.checked); };
 el('s_adminpath').onchange = function() { setSetting('adminPath', this.value); };
 el('s_puburl').onchange = function() { setSetting('publicFeedUrl', this.value); };
 el('s_pubtoken').onchange = function() { setSetting('publicFeedToken', this.value); };
@@ -2117,6 +2227,7 @@ setInterval(refresh, 2000);
   <div id="msg"></div>
   <div id="bar">
     <button id="pause" title="Pause or resume the stream" aria-label="Pause or resume"></button>
+    <button id="sound" title="Listen to the camera" aria-label="Listen" style="display:none"><svg viewBox="0 0 24 24"><polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" fill="currentColor" stroke="none"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg></button>
     <button id="snap" title="Save a snapshot" aria-label="Save a snapshot"><svg viewBox="0 0 24 24"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg></button>
     <span class="seg" id="scales">
       <button data-scale="fit" title="Fit the whole frame">Fit</button>
@@ -2162,6 +2273,7 @@ setInterval(refresh, 2000);
     freeze.style.display = 'none';
     img.removeAttribute('src');
     img.style.display = 'none';
+    audioStop();
     message(text);
   }
   function applyScale() {
@@ -2187,6 +2299,7 @@ setInterval(refresh, 2000);
     paused = !paused;
     icon();
     if (paused) {
+      audioStop();
       // Multipart JPEG has no pause: keep the frame that is on screen. The
       // stream is same-origin, so it can be copied into a canvas safely.
       if (img.naturalWidth > 0) {
@@ -2216,10 +2329,96 @@ setInterval(refresh, 2000);
     };
   }
   img.onerror = function() { if (want && !paused) { setTimeout(start, 1000); } };
+
+  // Live sound: raw 16 kHz mono PCM queued into an AudioContext. It starts
+  // only on the button, because browsers block sound without a gesture.
+  var soundBtn = document.getElementById('sound');
+  var audioOn = false, audioCtx = null, audioNext = 0, audioAbort = null;
+  var audioCarry = new Uint8Array(0);
+  var audioToken = Math.random().toString(36).slice(2) + Date.now().toString(36);
+
+  function soundIcon() {
+    soundBtn.classList.toggle('on', audioOn);
+    soundBtn.title = audioOn ? 'Mute the camera' : 'Listen to the camera';
+  }
+  function audioQueue(pcm) {
+    if (!audioCtx || !pcm.length) { return; }
+    var buf = audioCtx.createBuffer(1, pcm.length, 16000);
+    var ch = buf.getChannelData(0);
+    for (var i = 0; i < pcm.length; i++) { ch[i] = pcm[i] / 32768; }
+    var src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    var now = audioCtx.currentTime;
+    if (audioNext < now + 0.05 || audioNext > now + 1.5) { audioNext = now + 0.12; }
+    src.start(audioNext);
+    audioNext += buf.duration;
+  }
+  function audioBytes(bytes) {
+    var all = new Uint8Array(audioCarry.length + bytes.length);
+    all.set(audioCarry);
+    all.set(bytes, audioCarry.length);
+    var n = all.length & ~1;
+    audioCarry = all.subarray(n);
+    if (!n) { return; }
+    var pcm = new Int16Array(n / 2);
+    for (var i = 0, j = 0; i < n; i += 2, j++) {
+      var v = all[i] | (all[i + 1] << 8);
+      pcm[j] = (v & 0x8000) ? v - 0x10000 : v;
+    }
+    audioQueue(pcm);
+  }
+  async function audioPull() {
+    while (audioOn) {
+      try {
+        var res = await fetch('/audio?src=' + audioToken + '&t=' + Date.now(),
+          { signal: audioAbort.signal, cache: 'no-store' });
+        if (!res.ok || !res.body) { throw new Error('audio ' + res.status); }
+        audioCarry = new Uint8Array(0);
+        var reader = res.body.getReader();
+        while (audioOn) {
+          var r = await reader.read();
+          if (r.done) { break; }
+          audioBytes(r.value);
+        }
+      } catch (e) {
+        if (!audioOn) { return; }
+      }
+      if (!audioOn) { return; }
+      await new Promise(function(r) { setTimeout(r, 800); });
+    }
+  }
+  function audioStart() {
+    if (audioOn) { return; }
+    var AC = window.AudioContext || window.webkitAudioContext;
+    if (!AC) { return; }
+    if (!audioCtx) { audioCtx = new AC(); }
+    audioCtx.resume();
+    audioOn = true;
+    audioNext = 0;
+    audioAbort = new AbortController();
+    soundIcon();
+    audioPull();
+  }
+  function audioStop() {
+    if (!audioOn) { return; }
+    audioOn = false;
+    try { if (audioAbort) { audioAbort.abort(); } } catch (e) {}
+    audioAbort = null;
+    audioNext = 0;
+    if (audioCtx) { try { audioCtx.suspend(); } catch (e) {} }
+    soundIcon();
+  }
+  soundBtn.onclick = function() { if (audioOn) { audioStop(); } else { audioStart(); } showBar(); };
+  soundIcon();
+
   function refresh() {
     fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
       if (s.locked) { want = false; stop('Anonymous access is disabled'); return; }
       if (!s.streaming) { want = false; stop('Streaming is stopped'); return; }
+      var canHear = !!(s.audio && s.audio.enabled && s.audio.available);
+      soundBtn.style.display = canHear ? '' : 'none';
+      if (!canHear) { audioStop(); }
       if (!want) { want = true; start(); }
     }).catch(function() {});
   }

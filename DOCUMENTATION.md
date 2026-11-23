@@ -46,6 +46,29 @@ Most camera settings apply as soon as they are changed.
 | Streaming scale | 50% | 25 / 50 / 75 / 100. Only the viewer's stream is downscaled, and only while somebody is watching. Recordings and motion analysis always use the full camera frame. Lower values reduce the phone's encoding and network load. |
 | Orientation | Landscape | Landscape, Portrait, Landscape 180 or Portrait 270. Applied as EXIF rotation, so browsers and ffmpeg need no transcoding. |
 | Torch / LED | Off | Turns the camera flash on where it is available. |
+| Live sound from the microphone | Off | Adds a Sound button to the pages. Audio is 16 kHz mono PCM, captured only while at least one viewer is listening. Recordings do not include it. |
+
+### Live sound
+
+Sound is opt-in twice: the setting above must be on, and each viewer presses
+the Sound button, because browsers do not allow audio to start without a
+gesture. The page reads a raw 16 kHz mono PCM stream from `/audio` and plays it
+through the browser's AudioContext, keeping about 200 ms of buffer. The button
+turns blue while listening; pressing it again mutes.
+
+The microphone is opened when the first listener connects and closed a few
+seconds after the last one leaves, so it is never captured with nobody
+listening. The phone asks for the microphone permission on first run alongside
+the camera. If the permission is refused, the Sound button is not offered and
+`/api/status` reports why in `audio.error`.
+
+Access follows the video: anyone who may watch may also listen, and the relay's
+viewing password covers both. Over the public proxy the phone uploads one audio
+stream per camera and the relay fans it out, just like the video.
+
+Bandwidth is 32 KB/s per listener (256 kbit/s). Recordings are silent; sound is
+live only for now.
+
 
 ### Access
 
@@ -273,6 +296,7 @@ access enabled or with viewer credentials.
 | `GET /` | Public viewer when the admin path is set; otherwise the admin page. |
 | `GET /<admin path>` | Admin page shell. |
 | `GET /video` | MJPEG stream. |
+| `GET /audio` | Live sound: 16 kHz mono PCM16, delimited by the connection closing. Requires the Live sound setting. |
 | `GET /snapshot` | One JPEG; requires streaming to be on. |
 | `GET /cert` | Self-signed root certificate in PEM format. |
 | `GET /api/status` | Camera state. Admins also get version, build and admin path. |

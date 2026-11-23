@@ -97,12 +97,15 @@ class MainActivity : Activity() {
         if (requestCode == REQ_PERMISSIONS) {
             val i = permissions.indexOf(Manifest.permission.CAMERA)
             val cameraNowGranted = i >= 0 && grantResults[i] == PackageManager.PERMISSION_GRANTED
-            if (Prefs.enabled && cameraNowGranted) {
-                // The service registers its camera-type foreground service when
-                // it starts, which on first run is before the permission exists.
+            val j = permissions.indexOf(Manifest.permission.RECORD_AUDIO)
+            val micNowGranted = j >= 0 && grantResults[j] == PackageManager.PERMISSION_GRANTED
+            if (Prefs.enabled && (cameraNowGranted || micNowGranted)) {
+                // The service registers its foreground-service types when it
+                // starts, which on first run is before the permissions exist.
                 // The camera service keeps refusing every open until that
-                // registration happens again, so the whole service restarts -
-                // restarting just the camera changes nothing.
+                // registration happens again, and the microphone type cannot
+                // be added to a running notification, so the whole service
+                // restarts - restarting just the camera changes nothing.
                 CamService.stop(this)
                 handler.postDelayed({ if (Prefs.enabled) CamService.start(this) }, 1000)
             }
@@ -119,6 +122,11 @@ class MainActivity : Activity() {
         val needed = mutableListOf<String>()
         if (checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED) {
             needed += Manifest.permission.CAMERA
+        }
+        // Live sound is optional, but asking once here means the relay and the
+        // web page can offer it without a trip to the phone.
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+            needed += Manifest.permission.RECORD_AUDIO
         }
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED

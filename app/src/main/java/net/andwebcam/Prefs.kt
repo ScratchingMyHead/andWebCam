@@ -35,6 +35,7 @@ object Prefs {
     private const val KEY_PUBLIC_FEED_TOKEN = "public_feed_token"
     private const val KEY_VIEWER_PASSWORD = "viewer_password"
     private const val KEY_MDNS = "mdns_enabled"
+    private const val KEY_AUDIO = "audio_enabled"
     private const val KEY_AUTO_START_STREAM = "auto_start_stream"
     private const val KEY_ENABLED = "enabled"
     private const val KEY_BATTERY_ASKED = "battery_asked"
@@ -160,6 +161,14 @@ object Prefs {
     var mdnsEnabled: Boolean
         get() = sp.getBoolean(KEY_MDNS, true)
         set(v) = edit { putBoolean(KEY_MDNS, v) }
+
+    /**
+     * Live sound. Off by default: the microphone is only opened when a viewer
+     * asks for sound, and only if this is on. Recording does not use it.
+     */
+    var audioEnabled: Boolean
+        get() = sp.getBoolean(KEY_AUDIO, false)
+        set(v) = edit { putBoolean(KEY_AUDIO, v) }
 
     var facing: String
         get() = sp.getString(KEY_FACING, "back")!!
