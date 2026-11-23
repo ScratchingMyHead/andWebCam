@@ -507,6 +507,10 @@ function startVideo() {
   vidStartedAt = Date.now();
   img.style.display = '';
   setLoading(true);
+  // A multipart <img> does not always release its old connection when src is
+  // replaced, so clear it and force a reflow before opening a new stream.
+  img.removeAttribute('src');
+  void img.offsetWidth;
   img.src = '/video?t=' + Date.now();
   el('stopped').classList.add('hidden');
 }
