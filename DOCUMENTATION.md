@@ -171,6 +171,14 @@ between samples; make zones large enough along the expected path.
 Zones are stored as `aspect;min:max:x,y,...;...`. Older zone strings with no
 maximum are read as `100`.
 
+A zone firing is what starts a recording, and it is also the only activity
+that keeps one running. While a motion recording is active, the service checks
+once a second: if any zone is firing, the **Post-motion recording** timer is
+reset to its full length; if no zone has fired and the timer has expired, the
+recording stops. Movement outside every zone, or inside a zone but outside its
+size range, does not extend the recording. Disarming motion also stops zones
+firing, so the current recording ends after the remaining quiet period.
+
 ### Debug table
 
 The debug table under the zone list is hidden until **Show debug** is pressed.
