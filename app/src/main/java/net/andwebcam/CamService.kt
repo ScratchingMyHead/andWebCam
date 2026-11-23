@@ -99,6 +99,10 @@ class CamService : Service(), HttpServer.Host {
     private var lastFrameCount = 0L
     private var started = false
 
+    /** The video ring's byte budget has been sized from real frame sizes. */
+    @Volatile
+    private var ringSized = false
+
     /** Whether streaming is enabled (viewers are accepted and wake the camera). */
     @Volatile
     private var streamingEnabled = false
@@ -116,6 +120,7 @@ class CamService : Service(), HttpServer.Host {
     private fun closeCamera() {
         camera.stop()
         ring.clear()
+        ringSized = false   // next open re-sizes from the new run's frames
     }
 
     private val idleStop = Runnable {
@@ -194,6 +199,13 @@ class CamService : Service(), HttpServer.Host {
             this,
             onFrame = { jpeg ->
                 if (State.lastError != null) State.lastError = null
+                if (!ringSized && camera.avgFrameBytes > 0L) {
+                    // At service start the camera has not produced a frame,
+                    // so the budget fell back to the flat 8 MB floor. Now
+                    // that the real frame size is known, size it for the
+                    // configured number of seconds instead.
+                    configureRing()
+                }
                 lastFull.set(jpeg)
                 ring.push(jpeg)
                 recorder.push(jpeg)
@@ -992,8 +1004,12 @@ class CamService : Service(), HttpServer.Host {
         val secs = Prefs.motionPreRoll
         val est = preRollEstimate()
         val bytes = est["bytes"] as Long
-        val budget = if (secs == 0) 1L else bytes * 2 + 8L * 1024 * 1024
+        // Follow the number the UI warns about (avg frame x fps x seconds).
+        // A small margin absorbs frame-size variation; the old 2x + 8 MB
+        // allowed far more memory than the estimate people had accepted.
+        val budget = if (secs == 0) 1L else bytes + bytes / 10 + 512L * 1024L
         ring.configure(secs * 1000L, budget)
+        ringSized = bytes > 0L
         // Sound reuses the same window, with a modest byte budget: 30 s of
         // 16 kHz mono PCM is under a megabyte.
         audio.configureRing(secs * 1000L, 2L * 1024 * 1024)
