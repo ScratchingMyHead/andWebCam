@@ -148,6 +148,7 @@ class CamService : Service(), HttpServer.Host {
         Prefs.init(this)
         publicFeed.configure(Prefs.publicFeedUrl, Prefs.publicFeedToken, Prefs.viewerPassword)
         hub = StreamHub()
+        State.clients = 0
         scaler = StreamScaler({ jpeg -> hub.broadcast(jpeg) }, { hub.count > 0 })
         recorder.ringRef = ring
         recorder.onStopped = {
@@ -675,7 +676,7 @@ class CamService : Service(), HttpServer.Host {
             "charging" to batteryCharging(),
             "zoom" to Prefs.zoom,
             "orientation" to Prefs.orientation,
-            "clients" to State.clients,
+            "clients" to hub.count,
             "width" to sz.width,
             "height" to sz.height,
             "streaming" to streamingEnabled,
