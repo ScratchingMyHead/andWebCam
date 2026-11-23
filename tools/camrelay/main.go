@@ -26,13 +26,13 @@ import (
 )
 
 const (
-	defaultListen   = "127.0.0.1:18080"
+	defaultListen    = "127.0.0.1:18080"
 	defaultTokenFile = "/etc/camrelay/token"
-	maxBodyBytes    = 48 << 20 // enough for an APK update
-	chunkSize       = 32 << 10
-	pairTimeout     = 15 * time.Second
-	helloTimeout    = 15 * time.Second
-	phoneTimeout    = 70 * time.Second
+	maxBodyBytes     = 48 << 20 // enough for an APK update
+	chunkSize        = 32 << 10
+	pairTimeout      = 15 * time.Second
+	helloTimeout     = 15 * time.Second
+	phoneTimeout     = 70 * time.Second
 )
 
 var idRE = regexp.MustCompile(`^[a-z0-9-]{1,32}$`)
@@ -65,7 +65,7 @@ type responseMsg struct {
 }
 
 type ackMsg struct {
-	Type string      `json:"type"`
+	Type string          `json:"type"`
 	T    json.RawMessage `json:"t,omitempty"`
 }
 
@@ -94,6 +94,10 @@ type camera struct {
 	// a connection that never ends.
 	reqMu sync.Mutex
 	reqs  map[*websocket.Conn]struct{}
+
+	// A single upstream /video request feeds all viewers of this camera.
+	videoMu sync.Mutex
+	video   *videoHub
 }
 
 func (cam *camera) addReq(c *websocket.Conn) {
@@ -125,8 +129,8 @@ func (cam *camera) closeReqs() {
 }
 
 type pendingReq struct {
-	id    int64
-	cam   *camera
+	id     int64
+	cam    *camera
 	paired chan *websocket.Conn
 	done   chan struct{}
 }
@@ -183,6 +187,39 @@ func cameraIDFromHost(host string) string {
 		return parts[0]
 	}
 	return ""
+}
+
+// openUpstream asks the phone for a request socket and returns it with a
+// cleanup function that removes the pending entry exactly once.
+func (r *relay) openUpstream(cam *camera, msg openMsg) (*websocket.Conn, func(), error) {
+	pr := &pendingReq{
+		id: msg.ID, cam: cam,
+		paired: make(chan *websocket.Conn, 1),
+		done:   make(chan struct{}),
+	}
+	r.mu.Lock()
+	r.pend[msg.ID] = pr
+	r.mu.Unlock()
+	var once sync.Once
+	cleanup := func() {
+		once.Do(func() {
+			r.mu.Lock()
+			delete(r.pend, msg.ID)
+			r.mu.Unlock()
+			close(pr.done)
+		})
+	}
+	if err := sendJSON(cam, msg); err != nil {
+		cleanup()
+		return nil, nil, err
+	}
+	select {
+	case phone := <-pr.paired:
+		return phone, cleanup, nil
+	case <-time.After(pairTimeout):
+		cleanup()
+		return nil, nil, fmt.Errorf("phone did not open a request socket")
+	}
 }
 
 func (r *relay) cameraFor(req *http.Request) (*camera, bool) {
@@ -263,39 +300,29 @@ func (r *relay) handleProxy(w http.ResponseWriter, req *http.Request) {
 		delete(headers, "Authorization")
 	}
 
-	id := r.next.Add(1)
-	pr := &pendingReq{id: id, cam: cam, paired: make(chan *websocket.Conn, 1), done: make(chan struct{})}
-	r.mu.Lock()
-	r.pend[id] = pr
-	r.mu.Unlock()
-	defer func() {
-		r.mu.Lock()
-		delete(r.pend, id)
-		r.mu.Unlock()
-		close(pr.done)
-	}()
+	// The MJPEG stream is shared: one upstream request per camera, with every
+	// viewer reading from the same frames. Without this, each viewer uploads
+	// its own copy of the stream from the phone.
+	if req.Method == http.MethodGet && req.URL.Path == "/video" {
+		r.handleSharedVideo(w, req, cam, headers)
+		return
+	}
 
 	msg := openMsg{
 		Type:          "open",
-		ID:            id,
+		ID:            r.next.Add(1),
 		Method:        req.Method,
 		Path:          req.URL.Path,
 		Query:         req.URL.RawQuery,
 		Headers:       headers,
 		ContentLength: len(body),
 	}
-	if err := sendJSON(cam, msg); err != nil {
-		http.Error(w, "phone went offline", http.StatusBadGateway)
+	phone, cleanup, err := r.openUpstream(cam, msg)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
 		return
 	}
-
-	var phone *websocket.Conn
-	select {
-	case phone = <-pr.paired:
-	case <-time.After(pairTimeout):
-		http.Error(w, "phone did not open a request socket", http.StatusGatewayTimeout)
-		return
-	}
+	defer cleanup()
 	defer phone.Close()
 	// When the browser goes away (timeout, tab closed), stop reading from the
 	// phone. Otherwise Apache workers and phone viewers accumulate forever.
