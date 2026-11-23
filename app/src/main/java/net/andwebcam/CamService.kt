@@ -1,5 +1,6 @@
 package net.andwebcam
 
+import android.Manifest
 import android.app.ActivityManager
 import android.app.AlarmManager
 import android.app.Notification
@@ -95,6 +96,12 @@ class CamService : Service(), HttpServer.Host {
     private var multicastLock: WifiManager.MulticastLock? = null
     private var wifiLock: WifiManager.WifiLock? = null
     private var netCallback: ConnectivityManager.NetworkCallback? = null
+
+    /** Latest signal pushed by the system for the active transport. */
+    @Volatile
+    private var liveSignal: Pair<Int, Int>? = null
+
+    private var lastWifiScanMs = 0L
     private var scheduler: ScheduledExecutorService? = null
     private var lastFrameCount = 0L
     private var started = false
@@ -412,8 +419,44 @@ class CamService : Service(), HttpServer.Host {
         val cm = getSystemService(ConnectivityManager::class.java) ?: return "none"
         val net = cm.activeNetwork ?: return "none"
         val caps = cm.getNetworkCapabilities(net) ?: return "none"
+        // ConnectivityService's own dBm figure, refreshed with the network's
+        // capabilities; WifiInfo is a fallback on devices that omit it.
+        val pushed = liveSignal
+        val dbm = if (pushed != null && (
+                (pushed.first == NetworkCapabilities.TRANSPORT_WIFI &&
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) ||
+                (pushed.first == NetworkCapabilities.TRANSPORT_CELLULAR &&
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR))
+                )) pushed.second else caps.signalStrength.takeIf { it in -127..-1 }
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
-            val rssi = try {
+            // WifiInfo's RSSI goes stale on some devices. Scan results are the
+            // only live value; reading them needs fine location, which the
+            // app asks for on first launch and uses for nothing else.
+            val fresh = if (checkSelfPermission(Manifest.permission.ACCESS_FINE_LOCATION) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                val wm = try {
+                    applicationContext.getSystemService(WifiManager::class.java) as WifiManager?
+                } catch (e: Exception) {
+                    null
+                }
+                wm?.let { wifi ->
+                    val now = System.currentTimeMillis()
+                    if (now - lastWifiScanMs > 60_000L) {
+                        lastWifiScanMs = now
+                        try { wifi.startScan() } catch (e: Exception) {}
+                    }
+                    @Suppress("DEPRECATION")
+                    val bssid = try { wifi.connectionInfo?.bssid } catch (e: Exception) { null }
+                    try {
+                        wifi.scanResults.firstOrNull { r -> bssid != null && r.BSSID == bssid }?.level
+                    } catch (e: Exception) {
+                        null
+                    }
+                }
+            } else null
+            val rssi = fresh ?: dbm ?: try {
+                @Suppress("DEPRECATION")
                 (applicationContext.getSystemService(WifiManager::class.java) as WifiManager?)?.connectionInfo?.rssi
             } catch (e: Exception) {
                 null
@@ -422,13 +465,9 @@ class CamService : Service(), HttpServer.Host {
                 "Wi-Fi $rssi dBm (${signalWords[wifiBars(rssi)]})"
         }
         if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
-            val ss = caps.signalStrength ?: return "Mobile"
-            // The build's SDK stub hides these methods; the device has them.
-            val level = try { ss.javaClass.getMethod("getLevel").invoke(ss) as? Int } catch (e: Exception) { null }
-            val dbm = try { ss.javaClass.getMethod("getDbm").invoke(ss) as? Int } catch (e: Exception) { null }
-            val bars = level?.coerceIn(0, 4) ?: dbm?.let { mobileBars(it) }
+            val bars = dbm?.let { mobileBars(it) }
             val rating = if (bars != null) " (${signalWords[bars]})" else ""
-            return if (dbm != null) "Mobile $dbm dBm$rating" else "Mobile$rating"
+            return if (dbm != null) "Mobile $dbm dBm$rating" else "Mobile"
         }
         return "none"
     }
@@ -505,6 +544,21 @@ class CamService : Service(), HttpServer.Host {
             override fun onAvailable(network: Network) = networkChanged()
             override fun onLost(network: Network) = networkChanged()
             override fun onLinkPropertiesChanged(network: Network, lp: LinkProperties) = networkChanged()
+            override fun onCapabilitiesChanged(network: Network, caps: NetworkCapabilities) {
+                val transport = when {
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) ->
+                        NetworkCapabilities.TRANSPORT_WIFI
+                    caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) ->
+                        NetworkCapabilities.TRANSPORT_CELLULAR
+                    else -> return
+                }
+                val signal = caps.signalStrength.takeIf { it in -127..-1 } ?: return
+                val previous = liveSignal
+                liveSignal = transport to signal
+                if (previous?.second != signal) {
+                    Log.i(TAG, "signal update: transport=$transport dBm=$signal")
+                }
+            }
         }
         try {
             cm.registerDefaultNetworkCallback(cb)
