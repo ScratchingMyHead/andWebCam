@@ -164,11 +164,9 @@ object WebUi {
 <main>
   <div class="banner">
     <div class="bitem"><span class="bk">Status</span><span class="bv" id="i_state">-</span></div>
-    <div class="bitem"><span class="bk">Camera</span><span class="bv" id="i_cam">-</span></div>
     <div class="bitem"><span class="bk">Video</span><span class="bv" id="i_video">-</span></div>
     <div class="bitem"><span class="bk">Battery</span><span class="bv" id="i_batt">-</span></div>
     <div class="bitem"><span class="bk">Signal</span><span class="bv" id="i_signal">-</span></div>
-    <div class="bitem"><span class="bk">Viewers</span><span class="bv" id="i_view">-</span></div>
   </div>
   <div class="content">
     <div class="vleft">
@@ -830,6 +828,8 @@ function updateStatusText(s) {
   if (s.recording && s.recStart) {
     st += ' <span class="rec">&#9679; ' + recFmtElapsed(Date.now() - s.recStart) + '</span>';
   }
+  var n = s.clients || 0;
+  st += ' · ' + n + (n === 1 ? ' viewer' : ' viewers');
   el('i_state').innerHTML = st;
 }
 
@@ -905,14 +905,13 @@ function refresh() {
     el('recBufferHint').textContent = pr > 0
       ? 'Recording includes a ' + pr + '-second pre-roll buffer'
       : 'No pre-roll buffer';
-    el('i_cam').textContent = s.facing || '-';
     el('i_video').textContent = (s.width || '?') + 'x' + (s.height || '?') +
-      ' · ' + (s.fpsActive || 0) + '/' + (s.fps || '?') + ' fps';
+      ' · ' + (s.fpsActive || 0) + '/' + (s.fps || '?') + ' fps · ' +
+      (s.facing === 'back' ? 'rear' : (s.facing === 'front' ? 'front' : (s.facing || '?')));
     el('i_batt').textContent = s.battery == null ? '-'
       : s.battery + '%' + (s.charging ? ' charging' : '') +
         (typeof s.batteryTemp === 'number' ? ', ' + Math.round(s.batteryTemp) + '\u00B0C' : '');
     el('i_signal').textContent = s.signal || '-';
-    el('i_view').textContent = (s.clients || 0);
     applyVideo(s);
     // A poll that was due long ago means the machine was suspended, and the
     // stream connection went with it: nothing about the element says so.
