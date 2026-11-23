@@ -166,7 +166,7 @@ object WebUi {
     <div class="bitem"><span class="bk">Status</span><span class="bv" id="i_state">-</span></div>
     <div class="bitem"><span class="bk">Video</span><span class="bv" id="i_video">-</span></div>
     <div class="bitem"><span class="bk">Battery</span><span class="bv" id="i_batt">-</span></div>
-    <div class="bitem"><span class="bk">Signal</span><span class="bv" id="i_signal">-</span></div>
+    <div class="bitem"><span class="bk">Viewers</span><span class="bv" id="i_view">-</span></div>
   </div>
   <div class="content">
     <div class="vleft">
@@ -241,11 +241,9 @@ object WebUi {
       <div class="row">
         <label class="check"><input id="s_audio" type="checkbox"> Live sound from the microphone</label>
       </div>
-      <p class="hint">Viewers press a Sound button; the microphone is only open while someone listens. Turning this off disconnects them.</p>
       <div class="row">
         <label class="check"><input id="s_recaudio" type="checkbox"> Record sound in MP4 files</label>
       </div>
-      <p class="hint">Sound gets the same pre-roll as the video. The microphone stays open while streaming, so Android shows its indicator the whole time.</p>
 
       <h2>Access</h2>
       <div class="row">
@@ -828,8 +826,6 @@ function updateStatusText(s) {
   if (s.recording && s.recStart) {
     st += ' <span class="rec">&#9679; ' + recFmtElapsed(Date.now() - s.recStart) + '</span>';
   }
-  var n = s.clients || 0;
-  st += ' · ' + n + (n === 1 ? ' viewer' : ' viewers');
   el('i_state').innerHTML = st;
 }
 
@@ -911,7 +907,7 @@ function refresh() {
     el('i_batt').textContent = s.battery == null ? '-'
       : s.battery + '%' + (s.charging ? ' charging' : '') +
         (typeof s.batteryTemp === 'number' ? ', ' + Math.round(s.batteryTemp) + '\u00B0C' : '');
-    el('i_signal').textContent = s.signal || '-';
+    el('i_view').textContent = (s.clients || 0);
     applyVideo(s);
     // A poll that was due long ago means the machine was suspended, and the
     // stream connection went with it: nothing about the element says so.

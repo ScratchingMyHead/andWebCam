@@ -33,9 +33,9 @@ entirely from a browser.
 
 - An arm64-v8a Android phone (Android 9 / API 28 or newer), reachable from
   wherever you plan to watch.
-- Camera permission. Microphone permission for live sound (optional).
-  Notifications permission on Android 13+ for the
-  foreground service. Battery-optimisation exemption is recommended so the
+- Camera permission. Microphone permission for live sound and sound in
+  recordings (both off by default). Notifications permission on Android 13+
+  for the foreground service. Battery-optimisation exemption is recommended so the
   camera survives with the screen off.
 - To build from source: JDK 17, Android SDK 34, release signing properties in
   `local.properties`, and the OpenCV Android AAR in `mavenLocal()` (or Maven

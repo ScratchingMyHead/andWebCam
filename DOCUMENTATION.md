@@ -30,6 +30,25 @@ hash and is no longer displayed. The web UI uses a login form; scripts can use
 HTTP basic auth or a session cookie. Anonymous view-only access is off by
 default.
 
+### Permissions
+
+Asked for together on first launch: camera, notifications (Android 13+) and
+microphone. The microphone is needed for live sound and for sound in
+recordings; both are off by default, but Android shows its microphone
+indicator whenever the mic is actually open.
+
+## Status bar
+
+The page header shows four cells.
+
+- **Status** — the service state: streaming, motion, and a running recording
+  with its elapsed time.
+- **Video** — the resolution, the actual and configured frame rate, and which
+  camera is in use.
+- **Battery** — percentage, charging state and battery temperature (omitted if
+  the phone does not report one).
+- **Viewers** — how many connections are watching the stream.
+
 ## Settings reference
 
 ### Camera
@@ -59,7 +78,8 @@ turns blue while listening; pressing it again mutes.
 
 The microphone is opened when the first listener connects, or for the whole
 time streaming is on when **Record sound in MP4 files** is enabled, and closes
-a few seconds after the last use. The phone asks for the microphone permission
+a few seconds after the last use. If the setting is turned off, any listeners
+are disconnected immediately. The phone asks for the microphone permission
 on first run alongside the camera. If the permission is refused, the Sound
 button is not offered and `/api/status` reports why in `audio.error`.
 
