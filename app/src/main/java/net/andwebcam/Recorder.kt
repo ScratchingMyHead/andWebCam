@@ -129,6 +129,7 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
     private var audioDone = false
     private var audioFeeder: Thread? = null
     @Volatile private var feedAudio = false
+    @Volatile private var audioCutoffPtsUs = Long.MAX_VALUE
     private var lastVideoTimeMs = 0L
 
     /** Whether the last finished file really carries an audio track. */
@@ -435,6 +436,8 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
         this.audioDone = false
         this.audioFeeder = null
         this.feedAudio = false
+        this.audioCutoffPtsUs = Long.MAX_VALUE
+        this.loggedBoundary = false
         this.lastVideoTimeMs = 0L
         this.soundInLastFile = false
         this.writtenBytes = 0
@@ -526,9 +529,12 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
         try {
             while (true) {
                 if (stopRequested) break
-                val f = nextFrame()
-                if (f == null) {
+                if (!feedOneFrame(enc, w, h)) {
+                    // No frame yet: drain what the encoders have produced
+                    // without spinning on an empty queue.
+                    drainEncoder(enc, w, h, 0)
                     drainAudio(0)
+                    try { Thread.sleep(10) } catch (_: InterruptedException) {}
                     continue
                 }
                 // The AAC sink may still be waiting for its first output;
@@ -539,10 +545,24 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
                     audio.endRecording()
                     audioEnc = null
                 }
-                feedFrame(enc, f, w, h)
-                drainEncoder(enc, w, h, 0)
                 drainAudio(0)
                 checkCap()
+            }
+            // Stop leaves frames in the queue that were captured before the
+            // press of Stop. Encode them too, or the picture ends early and
+            // the player freezes its last frame while the sound carries on.
+            val stopAtMs = System.currentTimeMillis() + 100
+            val tailDeadline = stopAtMs + 3000
+            while (System.currentTimeMillis() < tailDeadline) {
+                val f = nextFrame() ?: break
+                if (f.timeMs > stopAtMs) break
+                if (!feedOneFrame(enc, w, h)) break
+                drainAudio(0)
+            }
+            // The camera can stop delivering a moment before Stop, which
+            // would otherwise leave sound running past the last frame.
+            if (lastVideoTimeMs > t0Ms) {
+                audioCutoffPtsUs = (lastVideoTimeMs - t0Ms) * 1000L + 100_000L
             }
         } catch (e: OutOfMemoryError) {
             memoryFailure = true
@@ -581,22 +601,47 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
         onStopped?.invoke()
     }
 
-    private fun nextFrame(): VideoRing.Frame? {
-        if (ringIdx < ringFrames.size) return ringFrames[ringIdx++]
-        return frameQueue.poll(200, TimeUnit.MILLISECONDS)
+    private enum class FeedResult { QUEUED, BUSY, BAD }
+
+    private fun nextFrame(): VideoRing.Frame? =
+        if (ringIdx < ringFrames.size) ringFrames[ringIdx] else frameQueue.peek()
+
+    /** Only advance past a frame once the encoder has actually taken it. */
+    private fun commitFrame() {
+        if (ringIdx < ringFrames.size) ringIdx++ else frameQueue.poll()
+    }
+
+    private var loggedBoundary = false
+
+    /** Feed one frame; a busy encoder keeps the frame for the next attempt. */
+    private fun feedOneFrame(enc: MediaCodec, w: Int, h: Int): Boolean {
+        val f = nextFrame() ?: return false
+        if (!loggedBoundary && ringIdx == ringFrames.size && ringFrames.isNotEmpty()) {
+            loggedBoundary = true
+            Log.i(TAG, "video boundary: last pre-roll ${ringFrames.last().timeMs}," +
+                " first live ${f.timeMs}, gap ${f.timeMs - ringFrames.last().timeMs}ms")
+        }
+        when (feedFrame(enc, f, w, h)) {
+            FeedResult.QUEUED -> {
+                commitFrame()
+                drainEncoder(enc, w, h, 0)
+            }
+            FeedResult.BUSY -> drainEncoder(enc, w, h, 0)
+            FeedResult.BAD -> commitFrame()
+        }
+        return true
     }
 
     /** Decode one frame, convert it, push it to the encoder. */
-    private fun feedFrame(enc: MediaCodec, f: VideoRing.Frame, w: Int, h: Int) {
-        if (!jpegToNv12(f.jpeg, w, h)) return
+    private fun feedFrame(enc: MediaCodec, f: VideoRing.Frame, w: Int, h: Int): FeedResult {
+        if (!jpegToNv12(f.jpeg, w, h)) return FeedResult.BAD
         if (t0Ms == 0L) t0Ms = f.timeMs
         lastVideoTimeMs = f.timeMs
         var pts = (f.timeMs - t0Ms) * 1000L
         if (pts <= lastPtsUs) pts = lastPtsUs + 1
-        lastPtsUs = pts
-        val idx = enc.dequeueInputBuffer(100)
-        if (idx < 0) return
-        val buf = enc.getInputBuffer(idx) ?: return
+        val idx = try { enc.dequeueInputBuffer(100) } catch (e: Exception) { -1 }
+        if (idx < 0) return FeedResult.BUSY
+        val buf = enc.getInputBuffer(idx) ?: return FeedResult.BAD
         buf.clear()
         buf.put(yBuf)
         buf.put(uvBuf)
@@ -604,8 +649,10 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
             idx, 0, yBuf.size + uvBuf.size, pts,
             if (sentAnyInput) 0 else MediaCodec.BUFFER_FLAG_SYNC_FRAME,
         )
+        lastPtsUs = pts
         sentAnyInput = true
         framesFed++
+        return FeedResult.QUEUED
     }
 
     /**
@@ -644,6 +691,7 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
         val enc = audioEnc ?: return true
         var pts = (c.timeMs - t0Ms) * 1000L
         if (pts < 0) pts = 0
+        if (pts >= audioCutoffPtsUs) return true   // consume, but past the picture
         if (pts <= audioPtsUs) pts = audioPtsUs + 1
         val idx = try { enc.dequeueInputBuffer(50_000) } catch (e: Exception) { return false }
         if (idx < 0) return false

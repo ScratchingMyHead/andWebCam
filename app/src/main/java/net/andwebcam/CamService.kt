@@ -924,8 +924,10 @@ class CamService : Service(), HttpServer.Host {
         if (!streamingEnabled) return "Streaming is off. Turn it on to record."
         preRollBlock()?.let { return it }
         // Frames come from the camera; a session that starts with it closed
-        // would just fill the file with silence, so open it first.
-        camera.start()
+        // would just fill the file with silence, so open it first. Opening an
+        // already-running camera tears its session down and reopens it, which
+        // leaves a visible gap right at the pre-roll/live boundary.
+        if (!camera.active) camera.start()
         return recorder.start(camera.currentSize.width, camera.currentSize.height)
     }
 
