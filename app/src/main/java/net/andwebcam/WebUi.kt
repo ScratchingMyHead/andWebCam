@@ -135,6 +135,7 @@ object WebUi {
  .panel a { color:#7cc4ff }
  .foot { color:#556; font-size:11px; text-align:right; padding:6px 4px 0; font-family:monospace }
  .check { display:flex; align-items:center; gap:8px; font-size:13px; color:#bbb }
+ .masked { -webkit-text-security: disc }
  .certbox { margin:10px 0; border:1px solid #222; border-radius:6px; padding:7px 9px }
  .certbox summary { cursor:pointer; font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#8ab }
  .certbox[open] summary { margin-bottom:6px }
@@ -265,11 +266,11 @@ object WebUi {
         </div>
         <div class="row">
           <label>Proxy token</label>
-          <input id="s_pubtoken" type="password" autocomplete="off" spellcheck="false">
+          <input id="s_pubtoken" type="text" class="masked" autocomplete="off" spellcheck="false">
         </div>
         <div class="row">
           <label>Viewing password (blank = none)</label>
-          <input id="s_pubpass" type="password" autocomplete="off" spellcheck="false">
+          <input id="s_pubpass" type="text" class="masked" autocomplete="off" spellcheck="false">
         </div>
         <p class="hint" id="v_pubstatus"></p>
       </details>
@@ -284,7 +285,7 @@ object WebUi {
         </div>
         <div class="row">
           <label>DuckDNS token</label>
-          <input id="s_ctok" type="password" autocomplete="off" spellcheck="false">
+          <input id="s_ctok" type="text" class="masked" autocomplete="off" spellcheck="false">
         </div>
         <div class="row">
           <label>Validation</label>
@@ -337,7 +338,7 @@ object WebUi {
       <h2>Admin password</h2>
       <div class="row">
         <label>New password</label>
-        <input id="p_new" type="password">
+        <input id="p_new" type="password" autocomplete="new-password">
       </div>
       <button id="pwset">Change password</button>
       <p class="hint" id="pwmsg"></p>
@@ -427,15 +428,17 @@ object WebUi {
     </div>
     <div class="panel hidden" id="loginForm">
       <h2>Log in</h2>
+      <form id="loginFormEl" autocomplete="on">
       <div class="row">
         <label>Username</label>
-        <input id="l_user" type="text" value="admin">
+        <input id="l_user" name="username" type="text" value="admin" autocomplete="username" spellcheck="false">
       </div>
       <div class="row">
         <label>Password</label>
-        <input id="l_pass" type="password">
+        <input id="l_pass" name="password" type="password" autocomplete="current-password">
       </div>
-      <button id="doLogin">Log in</button>
+      <button id="doLogin" type="submit">Log in</button>
+      </form>
       <p id="loginErr" class="err"></p>
     </div>
   </div>
@@ -880,6 +883,14 @@ function updateCert(c) {
   el('certIssue').textContent = c.busy ? 'Renewing...' : 'Renew certificate';
 }
 
+// A password manager sees a write to a password input as a possible password
+// change. Only write these fields when the value really changed, and never
+// while the user is typing in one.
+function setSecretValue(id, value) {
+  var e = el(id);
+  if (document.activeElement !== e && e.value !== value) { e.value = value; }
+}
+
 function refresh() {
   fetch('/api/status').then(function(r) { return r.json(); }).then(function(s) {
     var now = Date.now();
@@ -970,8 +981,8 @@ function refresh() {
     el('s_adminpath').placeholder = 'e.g. admin for ' + host + '/admin';
     var pf = s.publicFeed || {};
     if (document.activeElement !== el('s_puburl')) { el('s_puburl').value = pf.url || ''; }
-    if (document.activeElement !== el('s_pubtoken')) { el('s_pubtoken').value = pf.token || ''; }
-    if (document.activeElement !== el('s_pubpass')) { el('s_pubpass').value = pf.viewerPassword || ''; }
+    setSecretValue('s_pubtoken', pf.token || '');
+    setSecretValue('s_pubpass', pf.viewerPassword || '');
     el('v_pubstatus').textContent = !pf.url ? 'Disabled.' :
       (pf.connected ? ('Connected as ' + (pf.id || 'guest') + '.') :
         ('Not connected' + (pf.error ? ': ' + pf.error : '') + '.'));
@@ -1339,13 +1350,10 @@ function doLogin() {
     el('loginErr').textContent = 'Could not reach the phone';
   });
 }
-el('doLogin').onclick = doLogin;
-// There is no <form> around these fields, so Enter does nothing on its own.
-function loginKey(e) {
-  if (e.key === 'Enter') { e.preventDefault(); doLogin(); }
-}
-el('l_user').addEventListener('keydown', loginKey);
-el('l_pass').addEventListener('keydown', loginKey);
+el('loginFormEl').addEventListener('submit', function(e) {
+  e.preventDefault();
+  doLogin();
+});
 // ---- the recording pane --------------------------------------------------
 // The list is polled on its own timer, only while the pane is open (applyPane
 // starts and stops it), because every poll lists the folder on the phone.
