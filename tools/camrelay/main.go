@@ -192,7 +192,7 @@ func (r *relay) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 
 const offlinePage = `<!doctype html><meta charset="utf-8"><title>Camera offline</title>
 <style>body{background:#111;color:#ccc;font:16px system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0}
-div{text-align:center}</style><div><h2>Camera offline</h2><p>Waiting for the phone to reconnect…</p>
+div{text-align:center}</style><div><h2>Camera offline</h2><p>Waiting for the camera to reconnect…</p>
 <p><a href="/">Retry</a></p></div><meta http-equiv="refresh" content="5">`
 
 func (r *relay) handleProxy(w http.ResponseWriter, req *http.Request) {
@@ -356,10 +356,17 @@ func (r *relay) handleControl(w http.ResponseWriter, req *http.Request) {
 	cam.online.Store(true)
 	r.mu.Lock()
 	if old, exists := r.cams[hello.ID]; exists && old.online.Load() {
-		r.mu.Unlock()
-		_ = conn.WriteJSON(errorMsg{Type: "error", Message: "camera already connected"})
-		conn.Close()
-		return
+		// A half-open socket can leave a stale registration behind. Let the
+		// new connection take over rather than locking the camera out.
+		log.Printf("cam %s: taking over stale registration", hello.ID)
+		old.online.Store(false)
+		old.writeMu.Lock()
+		oldConn := old.conn
+		old.conn = nil
+		old.writeMu.Unlock()
+		if oldConn != nil {
+			oldConn.Close()
+		}
 	}
 	r.cams[hello.ID] = cam
 	r.mu.Unlock()

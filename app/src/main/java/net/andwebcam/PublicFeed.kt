@@ -72,7 +72,6 @@ class PublicFeed {
     @Volatile private var socket: WebSocket? = null
     @Volatile private var enabled = false
     @Volatile private var connected = false
-    @Volatile private var fatal = false
     @Volatile private var id = ""
     @Volatile private var origin = ""     // https://cam2.example.com
     @Volatile private var wsOrigin = ""   // wss://cam2.example.com
@@ -109,7 +108,6 @@ class PublicFeed {
             socket?.cancel()
             socket = null
             connected = false
-            fatal = false
             lastError = ""
             reconnectDelay = RECONNECT_MIN
             if (enabled) {
@@ -147,7 +145,7 @@ class PublicFeed {
     private fun authHeader() = "Bearer $token"
 
     private fun connect() {
-        if (!enabled || socket != null || fatal) return
+        if (!enabled || socket != null) return
         val request = Request.Builder()
             .url("$wsOrigin/ws/")
             .header("Authorization", authHeader())
@@ -181,9 +179,8 @@ class PublicFeed {
                         lastPong = System.currentTimeMillis()
                     }
                     "error" -> handler.post {
-                        fatal = true
                         lastError = msg.optString("message")
-                        Log.w(TAG, "public proxy refused: $lastError")
+                        Log.w(TAG, "public proxy error: $lastError")
                         webSocket.cancel()
                         gone(webSocket, lastError)
                     }
@@ -307,10 +304,8 @@ class PublicFeed {
         lastError = reason
         handler.removeCallbacks(pingRunnable)
         if (!enabled) return
-        if (fatal) {
-            Log.w(TAG, "public proxy stopped: $reason")
-            return
-        }
+        // Any error is retryable, including a rejected registration: a stale
+        // half-open socket on the relay clears itself, so trying again works.
         val delay = (reconnectDelay * (0.8 + Math.random() * 0.4)).toLong()
         reconnectDelay = min(reconnectDelay * 2, RECONNECT_MAX)
         Log.i(TAG, "public proxy reconnecting in ${delay / 1000}s: $reason")
