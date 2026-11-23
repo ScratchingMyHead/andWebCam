@@ -540,9 +540,13 @@ function applyVideo(s) {
 // again changes nothing. Reloading the source is what stopping and starting did
 // by hand, so that is what is done here once a few polls have seen no frame.
 function checkVideo() {
+  if (!vidStartedAt) { return; }
+  // Give a fresh stream time to deliver its first frame; otherwise the first
+  // few polls see no decoded image and open a second connection alongside it.
+  if (Date.now() - vidStartedAt < 12000) { vidMisses = 0; return; }
   // Once a frame has decoded, naturalWidth stays set even if the stream dies.
   // Refreshing periodically recovers from a silent stall after that point.
-  if (vidStartedAt && Date.now() - vidStartedAt > 90000) { startVideo(); return; }
+  if (Date.now() - vidStartedAt > 90000) { startVideo(); return; }
   if (el('vid').naturalWidth > 0) { vidMisses = 0; return; }
   if (++vidMisses >= 3) { startVideo(); }
 }
