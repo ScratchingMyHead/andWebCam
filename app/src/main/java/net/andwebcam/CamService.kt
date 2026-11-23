@@ -677,6 +677,7 @@ class CamService : Service(), HttpServer.Host {
             "zoom" to Prefs.zoom,
             "orientation" to Prefs.orientation,
             "clients" to hub.count,
+            "frames" to hub.frames,
             "width" to sz.width,
             "height" to sz.height,
             "streaming" to streamingEnabled,

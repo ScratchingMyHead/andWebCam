@@ -632,7 +632,7 @@ class HttpServer(
                 when {
                     role == Role.NONE -> unauthorized(output)
                     !host.isStreaming() -> respond(output, 503, "text/plain", "streaming stopped".toByteArray())
-                    else -> serveVideo(output)
+                    else -> serveVideo(output, queryParam(query, "src") ?: "")
                 }
             }
 
@@ -676,7 +676,7 @@ class HttpServer(
         }
     }
 
-    private fun serveVideo(output: BufferedOutputStream) {
+    private fun serveVideo(output: BufferedOutputStream, token: String) {
         val header = "HTTP/1.1 200 OK\r\n" +
             "Content-Type: multipart/x-mixed-replace; boundary=${StreamHub.BOUNDARY}\r\n" +
             "Cache-Control: no-store\r\n" +
@@ -688,7 +688,7 @@ class HttpServer(
         } catch (e: Exception) {
             return
         }
-        val client = hub.add(output)
+        val client = hub.add(output, token.ifEmpty { null })
         try {
             client.done.await()
         } catch (_: InterruptedException) {

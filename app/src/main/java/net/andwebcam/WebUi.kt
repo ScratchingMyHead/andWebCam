@@ -476,11 +476,16 @@ function setSetting(key, value) {
   }).catch(function() { hideBusy(); });
 }
 var showingVideo = null;
+// Identifies this page's stream so the server can drop a previous connection
+// from the same tab when the video source is replaced.
+var videoSrc = Math.random().toString(36).slice(2) + Date.now().toString(36);
 var vidRetry = null;
 var vidLoad = null;
 var vidPoll = null;
 var vidMisses = 0;
 var vidStartedAt = 0;
+var lastFrames = -1;
+var lastFrameAt = 0;
 // While the first frame is on its way the image element would otherwise show a
 // broken icon and its alt text, so it is hidden behind a plain placeholder until
 // a frame has actually been decoded (the load event is not delivered for
@@ -511,7 +516,7 @@ function startVideo() {
   // replaced, so clear it and force a reflow before opening a new stream.
   img.removeAttribute('src');
   void img.offsetWidth;
-  img.src = '/video?t=' + Date.now();
+  img.src = '/video?src=' + videoSrc + '&t=' + Date.now();
   el('stopped').classList.add('hidden');
 }
 function stopVideo() {
@@ -544,9 +549,9 @@ function checkVideo() {
   // Give a fresh stream time to deliver its first frame; otherwise the first
   // few polls see no decoded image and open a second connection alongside it.
   if (Date.now() - vidStartedAt < 12000) { vidMisses = 0; return; }
-  // Once a frame has decoded, naturalWidth stays set even if the stream dies.
-  // Refreshing periodically recovers from a silent stall after that point.
-  if (Date.now() - vidStartedAt > 90000) { startVideo(); return; }
+  // naturalWidth stays set after the first frame, so watch the frame counter
+  // from the phone instead. No frames for 20 s means the stream really died.
+  if (lastFrameAt && Date.now() - lastFrameAt > 20000) { startVideo(); return; }
   if (el('vid').naturalWidth > 0) { vidMisses = 0; return; }
   if (++vidMisses >= 3) { startVideo(); }
 }
@@ -794,6 +799,10 @@ function refresh() {
     // A poll that was due long ago means the machine was suspended, and the
     // stream connection went with it: nothing about the element says so.
     if (gap > 10000 && s.streaming) { startVideo(); }
+    if (typeof s.frames === 'number' && s.frames !== lastFrames) {
+      lastFrames = s.frames;
+      lastFrameAt = Date.now();
+    }
     if (s.streaming && !s.locked) { checkVideo(); }
     if (s.locked) {
       // Signed out: there is no stream to announce, only the way back in.
@@ -2129,6 +2138,7 @@ setInterval(refresh, 2000);
   var PAUSE = '<svg viewBox="0 0 16 16"><path d="M4 3h3v10H4zm5 0h3v10H9z"/></svg>';
   var paused = false;
   var want = false;
+  var streamToken = Math.random().toString(36).slice(2) + Date.now().toString(36);
   var hideTimer = null;
   var scaleMode = 'fit';
   try { scaleMode = localStorage.getItem('awcPubScale') || 'fit'; } catch (e) {}
@@ -2146,7 +2156,7 @@ setInterval(refresh, 2000);
     message('');
     freeze.style.display = 'none';
     img.style.display = '';
-    img.src = '/video?t=' + Date.now();
+    img.src = '/video?src=' + streamToken + '&t=' + Date.now();
   }
   function stop(text) {
     freeze.style.display = 'none';

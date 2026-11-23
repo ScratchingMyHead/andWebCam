@@ -22,7 +22,7 @@ class StreamHub {
         const val BOUNDARY = "andwebcamframe"
     }
 
-    class Client(val out: OutputStream) {
+    class Client(val out: OutputStream, val token: String? = null) {
         val done = CountDownLatch(1)
 
         private val lock = Object()
@@ -120,9 +120,17 @@ class StreamHub {
     val count: Int get() = clients.size
     val frames: Long get() = frameCount.get()
 
-    fun add(out: OutputStream): Client {
-        val c = Client(out)
+    fun add(out: OutputStream, token: String? = null): Client {
+        if (!token.isNullOrEmpty()) {
+            // A page can ask for the stream twice while reconnecting. Drop its
+            // old connection so one browser tab can never hold two viewers.
+            for (old in clients.toList()) {
+                if (old.token == token) remove(old)
+            }
+        }
+        val c = Client(out, token)
         clients.add(c)
+        Log.i("andWebCam", "video viewer connected (${clients.size} total)")
         latest?.let { c.offer(it) }
         c.start()
         State.clients = clients.size
