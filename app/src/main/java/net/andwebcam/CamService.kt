@@ -362,30 +362,58 @@ class CamService : Service(), HttpServer.Host {
         return if (((orientation % 180) + 180) % 180 == 90) h / w else w / h
     }
 
+    private data class Battery(val level: Int?, val charging: Boolean, val tempC: Float?)
+
     /**
-     * The battery percentage and whether it is charging, read from the
-     * sticky battery broadcast: no listener, just the last state the system
+     * Battery percentage, charging state and temperature from the sticky
+     * battery broadcast: no listener, just the last state the system
      * announced. Null when the phone will not say.
      */
-    private fun batteryInfo(): Pair<Int?, Boolean> {
+    private fun batteryInfo(): Battery {
         return try {
             val i = registerReceiver(null, android.content.IntentFilter(android.content.Intent.ACTION_BATTERY_CHANGED))
-                ?: return null to false
+                ?: return Battery(null, false, null)
             val level = i.getIntExtra(android.os.BatteryManager.EXTRA_LEVEL, -1)
             val scale = i.getIntExtra(android.os.BatteryManager.EXTRA_SCALE, -1)
             val pct = if (level >= 0 && scale > 0) level * 100 / scale else null
             val charging = i.getIntExtra(android.os.BatteryManager.EXTRA_PLUGGED, 0) != 0 ||
                 i.getIntExtra(android.os.BatteryManager.EXTRA_STATUS, -1) ==
                 android.os.BatteryManager.BATTERY_STATUS_FULL
-            Pair(pct, charging)
+            // The broadcast carries tenths of a degree; 0 means "no sensor".
+            val tenths = i.getIntExtra(android.os.BatteryManager.EXTRA_TEMPERATURE, 0)
+            val temp = if (tenths > 0) tenths / 10f else null
+            Battery(pct, charging, temp)
         } catch (e: Exception) {
-            Pair(null, false)
+            Battery(null, false, null)
         }
     }
 
-    private fun batteryLevel(): Int? = batteryInfo().first
-
-    private fun batteryCharging(): Boolean = batteryInfo().second
+    /** Wi-Fi RSSI or cellular level of the link the phone is actually using. */
+    @Suppress("DEPRECATION")
+    private fun signalText(): String {
+        val cm = getSystemService(ConnectivityManager::class.java) ?: return "none"
+        val net = cm.activeNetwork ?: return "none"
+        val caps = cm.getNetworkCapabilities(net) ?: return "none"
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)) {
+            val rssi = try {
+                (applicationContext.getSystemService(WifiManager::class.java) as WifiManager?)?.connectionInfo?.rssi
+            } catch (e: Exception) {
+                null
+            }
+            return if (rssi != null) "Wi-Fi $rssi dBm" else "Wi-Fi"
+        }
+        if (caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)) {
+            val dbm = try {
+                val ss = caps.signalStrength ?: return "Mobile"
+                // The build's SDK stub hides getDbm(); the device has it.
+                ss.javaClass.getMethod("getDbm").invoke(ss) as? Int
+            } catch (e: Exception) {
+                null
+            }
+            return if (dbm != null) "Mobile $dbm dBm" else "Mobile"
+        }
+        return "none"
+    }
 
     private fun ago(ms: Long): String =
         java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.US).format(java.util.Date(ms))
@@ -671,6 +699,7 @@ class CamService : Service(), HttpServer.Host {
     override fun statusJson(): MutableMap<String, Any?> {
         val caps = camera.capabilities()
         val sz = camera.currentSize
+        val battery = batteryInfo()
         return mutableMapOf(
             "running" to State.running,
             "ip" to State.ip,
@@ -686,8 +715,10 @@ class CamService : Service(), HttpServer.Host {
             "quality" to Prefs.quality,
             "streamScale" to Prefs.streamScale,
             "torch" to Prefs.torch,
-            "battery" to batteryLevel(),
-            "charging" to batteryCharging(),
+            "battery" to battery.level,
+            "charging" to battery.charging,
+            "batteryTemp" to battery.tempC,
+            "signal" to signalText(),
             "zoom" to Prefs.zoom,
             "orientation" to Prefs.orientation,
             "clients" to hub.count,

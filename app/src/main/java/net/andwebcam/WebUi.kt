@@ -165,9 +165,9 @@ object WebUi {
   <div class="banner">
     <div class="bitem"><span class="bk">Status</span><span class="bv" id="i_state">-</span></div>
     <div class="bitem"><span class="bk">Camera</span><span class="bv" id="i_cam">-</span></div>
-    <div class="bitem"><span class="bk">Resolution</span><span class="bv" id="i_res">-</span></div>
-    <div class="bitem"><span class="bk">Frame rate</span><span class="bv" id="i_fps">-</span></div>
+    <div class="bitem"><span class="bk">Video</span><span class="bv" id="i_video">-</span></div>
     <div class="bitem"><span class="bk">Battery</span><span class="bv" id="i_batt">-</span></div>
+    <div class="bitem"><span class="bk">Signal</span><span class="bv" id="i_signal">-</span></div>
     <div class="bitem"><span class="bk">Viewers</span><span class="bv" id="i_view">-</span></div>
   </div>
   <div class="content">
@@ -906,10 +906,12 @@ function refresh() {
       ? 'Recording includes a ' + pr + '-second pre-roll buffer'
       : 'No pre-roll buffer';
     el('i_cam').textContent = s.facing || '-';
-    el('i_res').textContent = (s.width || '?') + 'x' + (s.height || '?');
-    el('i_fps').textContent = (s.fpsActive || 0) + ' / ' + (s.fps || '?') + ' fps';
+    el('i_video').textContent = (s.width || '?') + 'x' + (s.height || '?') +
+      ' · ' + (s.fpsActive || 0) + '/' + (s.fps || '?') + ' fps';
     el('i_batt').textContent = s.battery == null ? '-'
-      : s.battery + '%' + (s.charging ? ' charging' : '');
+      : s.battery + '%' + (s.charging ? ' charging' : '') +
+        (typeof s.batteryTemp === 'number' ? ', ' + Math.round(s.batteryTemp) + '\u00B0C' : '');
+    el('i_signal').textContent = s.signal || '-';
     el('i_view').textContent = (s.clients || 0);
     applyVideo(s);
     // A poll that was due long ago means the machine was suspended, and the
