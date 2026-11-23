@@ -127,6 +127,8 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
     private var audioBytes = 0L
     private var audioChunks = 0
     private var audioDone = false
+    private var audioFeeder: Thread? = null
+    @Volatile private var feedAudio = false
     private var lastVideoTimeMs = 0L
 
     /** Whether the last finished file really carries an audio track. */
@@ -431,6 +433,8 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
         this.audioBytes = 0L
         this.audioChunks = 0
         this.audioDone = false
+        this.audioFeeder = null
+        this.feedAudio = false
         this.lastVideoTimeMs = 0L
         this.soundInLastFile = false
         this.writtenBytes = 0
@@ -485,8 +489,20 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
         // starting sound earlier would leave the picture beginning several
         // seconds into an otherwise silent recording.
         t0Ms = ringFrames.firstOrNull()?.timeMs ?: 0L
+        Log.i(TAG, "pre-roll video ${ringFrames.size} [${ringFrames.firstOrNull()?.timeMs}," +
+            " ${ringFrames.lastOrNull()?.timeMs}] audio ${audioPreroll.size} " +
+            "[${audioPreroll.firstOrNull()?.timeMs}, ${audioPreroll.lastOrNull()?.timeMs}] t0=$t0Ms")
         if (t0Ms != 0L && audioPreroll.isNotEmpty()) {
             audioPreroll = audioPreroll.filter { it.timeMs >= t0Ms }
+            Log.i(TAG, "pre-roll audio after trim: ${audioPreroll.size}")
+        }
+
+        if (audioEnc != null) {
+            feedAudio = true
+            audioFeeder = Thread({ audioFeedLoop() }, "andwebcam-audio-feed").apply {
+                isDaemon = true
+                start()
+            }
         }
 
         tempFile = tempName
@@ -515,24 +531,19 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
                     drainAudio(0)
                     continue
                 }
-                // The audio sink may still be waiting for its first AAC
-                // output; after enough pre-roll it clearly is not coming, so
-                // finish the file as video only rather than never starting.
+                // The AAC sink may still be waiting for its first output;
+                // after enough pre-roll it clearly is not coming, so finish
+                // the file as video only rather than never starting.
                 if (videoFormat != null && audioEnc != null && audioFormat == null && audioChunks > 40) {
                     Log.w(TAG, "AAC encoder produced no format; saving video only")
                     audio.endRecording()
                     audioEnc = null
                 }
-                feedAudioUntil(f.timeMs)
                 feedFrame(enc, f, w, h)
                 drainEncoder(enc, w, h, 0)
                 drainAudio(0)
                 checkCap()
             }
-            // Whatever sound arrived after the last frame belongs to this
-            // session too; a little tail keeps the audio from ending early.
-            val lastFrameMs = if (lastVideoTimeMs > 0L) lastVideoTimeMs else System.currentTimeMillis()
-            feedAudioUntil(lastFrameMs + 500)
         } catch (e: OutOfMemoryError) {
             memoryFailure = true
             stopRequested = true
@@ -540,6 +551,9 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
             Log.w(TAG, "recording stopped on an error: ${e.message}", e)
         }
 
+        // Finish feeding sound before flushing its encoder: otherwise the
+        // chunks still queued at the stop are lost and the tail goes silent.
+        stopAudioFeeder()
         val finished = finishSession(enc, w, h)
         val name = tempFile
         recording = false
@@ -595,43 +609,65 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
     }
 
     /**
-     * Move finished encoded data into the muxer. [timeoutUs] is 0 while the
-     * session runs (there is always more input coming) and a real wait while
-     * flushing at the end.
+     * Sound is fed from its own thread. The encoder only has a few input
+     * buffers, and output is drained on the recorder thread; feeding from
+     * that thread used to drop a chunk whenever no buffer was free, which
+     * removed most of the pre-roll and left a huge gap in the audio track.
      */
-    /** Feed all sound at or before a frame's time, keeping pre-roll first. */
-    private fun feedAudioUntil(limitMs: Long) {
+    private fun audioFeedLoop() {
         while (true) {
-            val c = if (audioIdx < audioPreroll.size) {
-                val next = audioPreroll[audioIdx]
-                if (next.timeMs > limitMs) return
-                audioIdx++
-                next
-            } else {
-                val next = audioQueue.peek() ?: return
-                if (next.timeMs > limitMs) return
-                audioQueue.poll() ?: return
+            val c = nextAudioChunk()
+            if (c == null) {
+                if (!feedAudio && audioIdx >= audioPreroll.size && audioQueue.isEmpty()) return
+                try { Thread.sleep(10) } catch (_: InterruptedException) { return }
+                continue
             }
-            feedAudioChunk(c)
+            if (t0Ms == 0L || c.timeMs < t0Ms) continue   // before the picture starts
+            if (!feedAudioChunk(c)) {
+                // Encoder busy: keep the chunk and try again, never drop it.
+                try { Thread.sleep(5) } catch (_: InterruptedException) { return }
+            }
         }
     }
 
-    private fun feedAudioChunk(c: AudioRing.Chunk) {
-        val enc = audioEnc ?: return
-        // No video time base yet means the first frame has not arrived;
-        // sound before it would start the file with a silent picture gap.
-        if (t0Ms == 0L || c.timeMs < t0Ms) return
+    private fun nextAudioChunk(): AudioRing.Chunk? {
+        if (audioIdx < audioPreroll.size) {
+            val c = audioPreroll[audioIdx]
+            audioIdx++
+            return c
+        }
+        return audioQueue.poll()
+    }
+
+    /** Queue one chunk; false means the encoder had no free input buffer. */
+    private fun feedAudioChunk(c: AudioRing.Chunk): Boolean {
+        val enc = audioEnc ?: return true
         var pts = (c.timeMs - t0Ms) * 1000L
         if (pts < 0) pts = 0
         if (pts <= audioPtsUs) pts = audioPtsUs + 1
-        audioPtsUs = pts
-        val idx = try { enc.dequeueInputBuffer(100) } catch (e: Exception) { return }
-        if (idx < 0) return
-        val buf = enc.getInputBuffer(idx) ?: return
+        val idx = try { enc.dequeueInputBuffer(50_000) } catch (e: Exception) { return false }
+        if (idx < 0) return false
+        val buf = enc.getInputBuffer(idx) ?: return false
         buf.clear()
         buf.put(c.pcm)
         enc.queueInputBuffer(idx, 0, c.pcm.size, pts, 0)
+        audioPtsUs = pts
         audioChunks++
+        return true
+    }
+
+    /** Let the feeder put the last chunks in before the encoder is flushed. */
+    private fun stopAudioFeeder() {
+        feedAudio = false
+        val feeder = audioFeeder ?: return
+        val deadline = System.currentTimeMillis() + 10_000
+        while (feeder.isAlive && System.currentTimeMillis() < deadline) {
+            // Drain while it feeds, or the encoder's output buffers fill up
+            // and the last chunks cannot get in.
+            drainAudio(0)
+            try { feeder.join(20) } catch (_: InterruptedException) { break }
+        }
+        audioFeeder = null
     }
 
     /** Move finished AAC packets into the muxer, or buffer until it starts. */

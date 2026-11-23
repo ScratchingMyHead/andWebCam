@@ -9,25 +9,24 @@ package net.andwebcam
  * are exactly the ones the stream already decodes and broadcasts, and
  * [push] is a lock-protected list append.
  *
- * Frames are dropped from the head as they age out or the byte budget is
- * exceeded, so the memory cost is bounded by both time and size.
+ * Frames are dropped from the head as they age out or the frame-count limit is
+ * reached, so a pre-roll holds the configured seconds at the configured fps.
  */
 class VideoRing(
     /** Keep frames this many milliseconds old at most. */
     @Volatile var maxAgeMs: Long = 10_000,
-    /** Hold at most this many bytes of frames; the oldest drop first. */
-    private var maxBytes: Long = 24L * 1024 * 1024,
+    /** Keep at most this many frames: the pre-roll seconds times the fps. */
+    @Volatile var maxFrames: Int = 150,
 ) {
     class Frame(val jpeg: ByteArray, val timeMs: Long)
 
     private val lock = Any()
     private val frames = ArrayList<Frame>()
-    private var bytes = 0L
 
-    /** Reconfigure the window and byte budget; old frames age out naturally. */
-    fun configure(ageMs: Long, byteBudget: Long) = synchronized(lock) {
+    /** Reconfigure the window; old frames age out naturally. */
+    fun configure(ageMs: Long, frameCount: Int) = synchronized(lock) {
         maxAgeMs = ageMs.coerceAtLeast(0L)
-        maxBytes = byteBudget.coerceAtLeast(1L)
+        maxFrames = frameCount.coerceAtLeast(1)
     }
 
     /**
@@ -40,14 +39,12 @@ class VideoRing(
         synchronized(lock) {
             if (maxAgeMs <= 0L) {
                 frames.clear()
-                bytes = 0
                 return
             }
             frames.add(Frame(jpeg, t))
-            bytes += jpeg.size
             val cutoff = t - maxAgeMs
-            while (frames.size > 1 && (frames[0].timeMs < cutoff || bytes > maxBytes)) {
-                bytes -= frames.removeAt(0).jpeg.size
+            while (frames.size > 1 && (frames[0].timeMs < cutoff || frames.size > maxFrames)) {
+                frames.removeAt(0)
             }
         }
     }
@@ -62,14 +59,12 @@ class VideoRing(
         val cutoff = System.currentTimeMillis() - maxAgeMs
         val out = frames.filter { it.timeMs >= cutoff }
         frames.clear()
-        bytes = 0
         out
     }
 
     /** Drop everything: the camera has stopped, so the run of live frames ends. */
     fun clear() = synchronized(lock) {
         frames.clear()
-        bytes = 0
     }
 
     /** How much of the [maxAgeMs] window is filled; 1.0 once it has. */

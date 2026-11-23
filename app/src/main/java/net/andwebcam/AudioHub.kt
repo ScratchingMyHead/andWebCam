@@ -31,17 +31,17 @@ import java.util.concurrent.atomic.AtomicLong
 /** The last [maxAgeMs] of PCM chunks, used as a recording's sound pre-roll. */
 class AudioRing(
     @Volatile var maxAgeMs: Long = 10_000,
-    private var maxBytes: Long = 2L * 1024 * 1024,
+    /** Keep at most this many chunks: the pre-roll seconds times 50. */
+    @Volatile var maxChunks: Int = 500,
 ) {
     class Chunk(val pcm: ByteArray, val timeMs: Long)
 
     private val lock = Any()
     private val chunks = ArrayList<Chunk>()
-    private var bytes = 0L
 
-    fun configure(ageMs: Long, byteBudget: Long) = synchronized(lock) {
+    fun configure(ageMs: Long, chunkCount: Int) = synchronized(lock) {
         maxAgeMs = ageMs.coerceAtLeast(0L)
-        maxBytes = byteBudget.coerceAtLeast(1L)
+        maxChunks = chunkCount.coerceAtLeast(1)
     }
 
     fun push(pcm: ByteArray) {
@@ -49,14 +49,12 @@ class AudioRing(
         synchronized(lock) {
             if (maxAgeMs <= 0L) {
                 chunks.clear()
-                bytes = 0
                 return
             }
             chunks.add(Chunk(pcm, t))
-            bytes += pcm.size
             val cutoff = t - maxAgeMs
-            while (chunks.size > 1 && (chunks[0].timeMs < cutoff || bytes > maxBytes)) {
-                bytes -= chunks.removeAt(0).pcm.size
+            while (chunks.size > 1 && (chunks[0].timeMs < cutoff || chunks.size > maxChunks)) {
+                chunks.removeAt(0)
             }
         }
     }
@@ -66,13 +64,11 @@ class AudioRing(
         val cutoff = System.currentTimeMillis() - maxAgeMs
         val out = chunks.filter { it.timeMs >= cutoff }
         chunks.clear()
-        bytes = 0
         out
     }
 
     fun clear() = synchronized(lock) {
         chunks.clear()
-        bytes = 0
     }
 
     val size: Int get() = synchronized(lock) { chunks.size }
@@ -87,6 +83,7 @@ class AudioHub(private val ctx: Context) {
 
         /** 20 ms of mono PCM16. */
         const val CHUNK_BYTES = SAMPLE_RATE / 50 * 2
+        const val CHUNKS_PER_SEC = 50
 
         /** Queued sound per listener; 25 chunks is half a second. */
         private const val MAX_QUEUED = 25
@@ -255,7 +252,7 @@ class AudioHub(private val ctx: Context) {
 
     fun endRecording() = synchronized(recordLock) { sink = null }
 
-    fun configureRing(ageMs: Long, byteBudget: Long) = ring.configure(ageMs, byteBudget)
+    fun configureRing(ageMs: Long, chunkCount: Int) = ring.configure(ageMs, chunkCount)
 
     fun shutdown() {
         recordingSource = false

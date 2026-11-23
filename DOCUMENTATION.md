@@ -151,7 +151,7 @@ recordings. The pane lists, plays and deletes them.
 | --- | --- | --- |
 | Detector | Cell grid | **Cell grid** is the built-in detector. **Object tracking** uses OpenCV; it needs the arm64 native library, and the app falls back to the grid with a visible error if the library cannot load. |
 | Reject lighting changes | On | OpenCV only. Rejects changes that keep the background's texture, such as headlights, reflections and exposure steps. |
-| Pre-roll buffer size | 10 s | 0–30 seconds of frames kept in memory before a trigger and included in motion recordings. Larger values use more RAM. |
+| Pre-roll buffer size | 10 s | 0–30 seconds of frames kept in memory before a trigger and included in motion recordings. The rings hold exactly seconds × fps frames (and the matching sound), so both tracks start together. Larger values use more RAM. |
 | Post-motion recording | 30 s | 5–300 seconds of quiet after the last motion before a motion recording ends. |
 | Sensitivity | 85 | 0–100, higher is more sensitive. For the grid it is the brightness change a cell needs. For OpenCV it sets the foreground threshold and the smallest blob considered, so raising it lets smaller, more distant objects be detected at the cost of more noise. |
 | Grid count | 32 | Grid only. Cells across the long edge of the frame; higher values see finer detail and more sensor noise. |
