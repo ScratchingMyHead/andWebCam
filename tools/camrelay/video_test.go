@@ -37,7 +37,7 @@ func TestAudioAndVideoUseSeparateUpstreams(t *testing.T) {
 	results := make(chan string, 2)
 	for _, path := range []string{"/video", "/audio"} {
 		go func(path string) {
-			req, _ := http.NewRequest("GET", srv.URL+path, nil)
+			req, _ := http.NewRequest("GET", srv.URL+path+"?src=tok-"+strings.TrimPrefix(path, "/"), nil)
 			req.Host = "cam2.offloop.net"
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {
@@ -59,6 +59,11 @@ func TestAudioAndVideoUseSeparateUpstreams(t *testing.T) {
 		}
 		if open.Path != "/video" && open.Path != "/audio" {
 			t.Fatalf("unexpected upstream path %q", open.Path)
+		}
+		// The page's stream token travels in the query; without it the app
+		// cannot drop a page's old connection when it reconnects.
+		if want := "tok-" + strings.TrimPrefix(open.Path, "/"); !strings.Contains(open.Query, want) {
+			t.Fatalf("upstream query %q does not carry %q", open.Query, want)
 		}
 		upstreams[open.Path] = open
 	}

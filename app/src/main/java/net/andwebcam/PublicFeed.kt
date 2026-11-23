@@ -18,6 +18,7 @@ import java.security.cert.X509Certificate
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.HostnameVerifier
 import javax.net.ssl.HttpsURLConnection
@@ -209,7 +210,12 @@ class PublicFeed {
         val body = ByteArrayOutputStream()
         val opened = CountDownLatch(1)
         val ended = CountDownLatch(1)
+        val socketGone = AtomicBoolean(false)
         val ref = AtomicReference<WebSocket?>()
+        // The relay closes this socket when its last browser viewer leaves.
+        // Without telling the local connection, the phone keeps serving a
+        // stream nobody reads and its viewer count creeps up for ever.
+        val localRef = AtomicReference<HttpsURLConnection?>()
         val reqSocket = client.newWebSocket(
             Request.Builder().url(wsUrl).header("Authorization", auth).build(),
             object : WebSocketListener() {
@@ -227,8 +233,16 @@ class PublicFeed {
                     if (m.optString("type") == "end") ended.countDown()
                 }
 
-                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) = ended.countDown()
-                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) = ended.countDown()
+                override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                    socketGone.set(true)
+                    ended.countDown()
+                    localRef.get()?.disconnect()
+                }
+                override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                    socketGone.set(true)
+                    ended.countDown()
+                    localRef.get()?.disconnect()
+                }
             }
         )
 
@@ -236,6 +250,9 @@ class PublicFeed {
         try {
             if (!opened.await(10, TimeUnit.SECONDS)) return
             if (!ended.await(30, TimeUnit.SECONDS)) return
+            // The browser may have gone away before we got here; opening a
+            // local stream now would leave a viewer with nobody reading it.
+            if (socketGone.get()) return
             val ws = ref.get() ?: return
             val method = msg.optString("method", "GET")
             val path = msg.optString("path", "/")
@@ -244,6 +261,7 @@ class PublicFeed {
                 (if (query.isNotEmpty()) "?$query" else "")
             val conn = URL(urlText).openConnection() as HttpsURLConnection
             local = conn
+            localRef.set(conn)
             conn.sslSocketFactory = localSsl.socketFactory
             conn.hostnameVerifier = localHostname
             conn.requestMethod = method
@@ -282,8 +300,8 @@ class PublicFeed {
             input?.use { stream ->
                 while (true) {
                     val n = stream.read(buffer)
-                    if (n < 0) break
-                    ws.send(buffer.toByteString(0, n))
+                    if (n < 0 || socketGone.get()) break
+                    if (!ws.send(buffer.toByteString(0, n))) break
                 }
             }
             ws.send(JSONObject().put("type", "end").toString())

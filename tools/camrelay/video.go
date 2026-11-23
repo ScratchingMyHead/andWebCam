@@ -22,6 +22,7 @@ type streamClient struct {
 type streamHub struct {
 	id      int64
 	path    string
+	query   string
 	mu      sync.Mutex
 	clients map[*streamClient]struct{}
 	headers *responseMsg
@@ -81,7 +82,7 @@ func (h *streamHub) broadcast(chunk []byte) {
 
 // getOrCreateStream returns the hub for one path on this camera, creating it
 // when nobody is watching yet.
-func (cam *camera) getOrCreateStream(r *relay, path string) (*streamHub, bool) {
+func (cam *camera) getOrCreateStream(r *relay, path, query string) (*streamHub, bool) {
 	cam.streamMu.Lock()
 	defer cam.streamMu.Unlock()
 	if cam.streams == nil {
@@ -93,6 +94,7 @@ func (cam *camera) getOrCreateStream(r *relay, path string) (*streamHub, bool) {
 	h := &streamHub{
 		id:      r.next.Add(1),
 		path:    path,
+		query:   query,
 		clients: make(map[*streamClient]struct{}),
 		done:    make(chan struct{}),
 	}
@@ -115,7 +117,7 @@ func (r *relay) streamUpstream(cam *camera, h *streamHub, headers map[string]str
 	log.Printf("cam %s: %s upstream starting id=%d", cam.id, name, h.id)
 	msg := openMsg{
 		Type: "open", ID: h.id,
-		Method: http.MethodGet, Path: h.path,
+		Method: http.MethodGet, Path: h.path, Query: h.query,
 		Headers: headers,
 	}
 	phone, cleanup, err := r.openUpstream(cam, msg)
@@ -181,7 +183,7 @@ func (r *relay) streamUpstream(cam *camera, h *streamHub, headers map[string]str
 func (r *relay) handleSharedStream(w http.ResponseWriter, req *http.Request, cam *camera, headers map[string]string) {
 	path := req.URL.Path
 	name := strings.TrimPrefix(path, "/")
-	h, fresh := cam.getOrCreateStream(r, path)
+	h, fresh := cam.getOrCreateStream(r, path, req.URL.RawQuery)
 	log.Printf("cam %s: %s viewer attached (fresh=%v, hub=%d)", cam.id, name, fresh, h.id)
 	if fresh {
 		go r.streamUpstream(cam, h, headers)
