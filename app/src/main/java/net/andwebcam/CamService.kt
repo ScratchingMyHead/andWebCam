@@ -287,7 +287,7 @@ class CamService : Service(), HttpServer.Host {
         State.ip = localIp()
 
         streamingEnabled = Prefs.autoStartStreaming
-        audio.setRecordSource(streamingEnabled && Prefs.recordAudio && AudioHub.hasPermission(this))
+        audio.setRecordSource(streamingEnabled && Prefs.audioEnabled && AudioHub.hasPermission(this))
         updateLocks(watchingSomething())   // start asleep unless something is watching or recording
         hub.onClientsChanged = { count -> onClientsChanged(count) }
         // The camera is not opened here: it stays closed until someone is
@@ -623,7 +623,7 @@ class CamService : Service(), HttpServer.Host {
 
     private fun setStreaming(on: Boolean) {
         streamingEnabled = on
-        audio.setRecordSource(on && Prefs.recordAudio && AudioHub.hasPermission(this))
+        audio.setRecordSource(on && Prefs.audioEnabled && AudioHub.hasPermission(this))
         Log.i(TAG, "streaming enabled=$on")
         if (on) {
             if (hub.count > 0) camera.start()
@@ -705,7 +705,6 @@ class CamService : Service(), HttpServer.Host {
                 "available" to AudioHub.hasPermission(this),
                 "listening" to audio.count,
                 "capturing" to audio.capturing,
-                "recordAudio" to Prefs.recordAudio,
                 "recordingSource" to audio.recordingSource,
                 "ring" to audio.ring.size,
                 "error" to audio.error,
@@ -785,11 +784,8 @@ class CamService : Service(), HttpServer.Host {
                 }
                 "audioEnabled" -> {
                     Prefs.audioEnabled = v.toBoolean()
+                    audio.setRecordSource(streamingEnabled && Prefs.audioEnabled && AudioHub.hasPermission(this))
                     if (!Prefs.audioEnabled) audio.disconnectAll()
-                }
-                "recordAudio" -> {
-                    Prefs.recordAudio = v.toBoolean()
-                    audio.setRecordSource(streamingEnabled && Prefs.recordAudio && AudioHub.hasPermission(this))
                 }
                 "publicFeedUrl" -> {
                     Prefs.publicFeedUrl = v

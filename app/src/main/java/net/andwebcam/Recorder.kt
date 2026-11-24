@@ -473,7 +473,7 @@ class Recorder(private val ctx: Context, private val audio: AudioHub) {
         // Sound: the audio ring carries the same window of pre-roll as the
         // video ring. The encoder is optional; if none is available the file
         // is still a valid video-only recording.
-        if (Prefs.recordAudio && AudioHub.hasPermission(ctx)) {
+        if (Prefs.audioEnabled && AudioHub.hasPermission(ctx)) {
             val aenc = selectAudioEncoder()
             if (aenc != null) {
                 audioEnc = aenc

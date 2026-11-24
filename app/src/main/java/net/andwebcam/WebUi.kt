@@ -62,6 +62,7 @@ object WebUi {
  .iconbtn { display:inline-flex; align-items:center; justify-content:center; padding:8px 10px; background:#333; color:#b9c6d4 }
  .iconbtn:hover:not(:disabled) { background:#3d3d3d; color:#fff }
  .iconbtn.on { background:#2b6cb0; color:#fff }
+ .iconbtn.on:hover:not(:disabled) { background:#2b6cb0 }
  .iconbtn:disabled { opacity:.5; cursor:default }
  .iconbtn svg { width:19px; height:19px; display:block; fill:none; stroke:currentColor; stroke-width:1.8; stroke-linecap:round; stroke-linejoin:round }
  .snapTop { margin-right:6px }
@@ -239,10 +240,7 @@ object WebUi {
         <label class="check"><input id="s_torch" type="checkbox"> Torch / LED</label>
       </div>
       <div class="row">
-        <label class="check"><input id="s_audio" type="checkbox"> Live sound from the microphone</label>
-      </div>
-      <div class="row">
-        <label class="check"><input id="s_recaudio" type="checkbox"> Record sound in MP4 files</label>
+        <label class="check"><input id="s_audio" type="checkbox"> Enable audio</label>
       </div>
 
       <h2>Access</h2>
@@ -972,7 +970,6 @@ function refresh() {
     if (document.activeElement !== el('auto')) { el('auto').checked = !!s.autoStartStreaming; }
     if (document.activeElement !== el('s_mdns')) { el('s_mdns').checked = s.mdnsEnabled !== false; }
     if (document.activeElement !== el('s_audio')) { el('s_audio').checked = !!(s.audio && s.audio.enabled); }
-    if (document.activeElement !== el('s_recaudio')) { el('s_recaudio').checked = !!(s.audio && s.audio.recordAudio); }
     if (document.activeElement !== el('s_adminpath')) { el('s_adminpath').value = s.adminPath || ''; }
     var host = s.host || ((s.serviceName || 'andwebcam') + '.local');
     el('s_adminpath').placeholder = 'e.g. admin for ' + host + '/admin';
@@ -1036,7 +1033,6 @@ el('s_anon').onchange = function() { setSetting('anonView', this.checked); };
 el('auto').onchange = function() { setSetting('autoStartStreaming', this.checked); };
 el('s_mdns').onchange = function() { setSetting('mdnsEnabled', this.checked); };
 el('s_audio').onchange = function() { setSetting('audioEnabled', this.checked); };
-el('s_recaudio').onchange = function() { setSetting('recordAudio', this.checked); };
 el('s_adminpath').onchange = function() { setSetting('adminPath', this.value); };
 el('s_puburl').onchange = function() { setSetting('publicFeedUrl', this.value); };
 el('s_pubtoken').onchange = function() { setSetting('publicFeedToken', this.value); };

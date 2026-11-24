@@ -13,7 +13,7 @@ entirely from a browser.
   and Fit / Width / Height / 1:1 controls in a bar that hides when idle, plus
   an optional Sound button for live microphone audio.
 - **Live sound** — opt-in 16 kHz mono audio at `/audio`, played by the browser's
-  AudioContext. The microphone is open only while someone is listening.
+  AudioContext. The microphone is open while streaming.
 - **Camera controls** — front or back camera, resolution, frame rate, JPEG
   quality, zoom, orientation and torch, all adjustable while streaming.
 - **Recording** — MP4 files on the phone with a 10-second pre-roll, optional
